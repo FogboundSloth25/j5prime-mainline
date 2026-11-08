@@ -5,6 +5,8 @@ import hashlib
 import io
 import json
 from pathlib import Path
+import re
+import subprocess
 import tarfile
 import unittest
 from unittest.mock import patch
@@ -63,6 +65,32 @@ class SourceLockTests(unittest.TestCase):
                 self.load_mutation(lock)
         with self.assertRaises(ValueError):
             self.load_mutation([])
+
+
+class PatchSeriesTests(unittest.TestCase):
+    def test_series_paths_and_patch_syntax(self):
+        names = [line for line in (ROOT / "patches/linux/series").read_text().splitlines()
+                 if line and not line.startswith("#")]
+        self.assertEqual(len(names), len(set(names)))
+        self.assertIn("0003-exynos7570-stage0-clock-providers.patch", names)
+        for index, name in enumerate(names, 1):
+            with self.subTest(name=name):
+                self.assertRegex(name, r"^[0-9]{4}-[a-z0-9-]+\.patch$")
+                self.assertEqual(int(name[:4]), index)
+                result = subprocess.run(["git", "apply", "--numstat",
+                                         str(ROOT / "patches/linux" / name)],
+                                        check=True, capture_output=True, text=True, timeout=5)
+                self.assertTrue(result.stdout.strip())
+                self.assertFalse(result.stderr)
+
+    def test_only_the_local_clock_source_is_installed(self):
+        source = ROOT / "kernel/drivers/clk/samsung/clk-exynos7570-stage0.c"
+        self.assertTrue(source.is_file())
+        build = (ROOT / "scripts/build.sh").read_text()
+        self.assertRegex(build, re.compile(
+            r'install -m 644 kernel/drivers/clk/samsung/clk-exynos7570-stage0\.c \\\n'
+            r'\s+"\$LINUX/drivers/clk/samsung/"'))
+        self.assertIn("CMU_MIF", source.read_text())
 
 
 def synthetic_tar(members, mode="w"):

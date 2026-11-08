@@ -29,12 +29,15 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
-            bc bison flex build-essential gcc-aarch64-linux-gnu \
+            bc bison flex build-essential clang gcc-aarch64-linux-gnu \
             libc6-dev-arm64-cross libssl-dev libelf-dev \
             device-tree-compiler xz-utils python3-venv python3-dev swig cpio
 
       - name: Run host-only tests
         run: python3 -m unittest discover -s tests -v
+
+      - name: Check clock stand-ins with Clang sanitizers too
+        run: HOSTCC=clang python3 -m unittest tests.test_clock -v
 
       - name: Build and validate pinned upstream kernel
         run: bash scripts/build.sh

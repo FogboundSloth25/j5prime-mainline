@@ -18,7 +18,17 @@ Public downstream references, **for hardware research only**:
 - [Exynos7570 DECON register definitions](https://github.com/awab228/android_kernel_samsung_on5xelte/blob/master/drivers/video/fbdev/exynos/decon_7570/regs-decon.h)
 - [Selected uniLoader fork](https://github.com/FogboundSloth25/uniLoader/tree/master),
   initial checkout commit `c68612d`; the phone-specific loader port is separate
-  and has not been pushed there yet.
+   and has not been pushed there yet.
+
+The clock reference is pinned separately to downstream commit
+`fdcdfbb4b6964fae7ea7737f948fd8409d3e0350`, canonical root tree
+`cbe29e343bc81bd9d9e1e6c3d117cca0a4c73024`. The root and 3269 child tree
+objects were independently reconstructed from the complete Git inventory;
+all 17 privately retained reference files matched their Git blob IDs.
+The recursive GitHub tree endpoint echoed the requested commit in its `sha`
+field; that value was not assumed to be the root tree. No downstream clock
+implementation is copied into the Linux base or this repository. See
+[the narrow clock design and pinned reference links](clock-stage0.md).
 
 The Linux base is the official upstream **v7.3.3** stable release, not any
 downstream source above. The kernel.org archive SHA-256 is pinned in
@@ -96,5 +106,7 @@ registers and rejects unsupported or unsafe layouts before writing.
 The mainline simplefb placeholder stays disabled. A later runtime handoff
 must replace its address, visible size, stride and format, reserve the live
 buffer (including any scanout backing beyond the visible surface), update
-its node/alias, and only then enable it. No DECON/DSIM reset or guessed
-Exynos7570 clock-controller register write is part of this stage.
+its node/alias, and only then enable it. No DECON/DSIM reset or display-clock
+reconfiguration is part of this stage. The sole managed clock register bit
+is the separately researched MCT PCLK gate; shared CMU_MIF clocks stay
+firmware-owned and read-only.

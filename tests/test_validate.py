@@ -182,13 +182,16 @@ class ConfigTests(unittest.TestCase):
         self.fragment = (ROOT / "configs/on5xelte-stage0.config").read_text()
         self.core = "\n".join(f"{key}=y" for key in (
             "CONFIG_ARM_GIC", "CONFIG_ARM_PSCI_FW", "CONFIG_ARM_ARCH_TIMER",
-            "CONFIG_CLKSRC_EXYNOS_MCT", "CONFIG_COMMON_CLK"))
+            "CONFIG_CLKSRC_EXYNOS_MCT", "CONFIG_COMMON_CLK",
+            "CONFIG_COMMON_CLK_SAMSUNG"))
         self.actual = self.fragment + "\n" + self.core + "\n"
 
     def test_strict_fragment_and_core_selection(self):
         report = validate_config(self.actual, self.fragment, POWER_SUPPLY_KCONFIG)
         self.assertGreater(report["requested_options_checked"], 50)
-        self.assertEqual(report["core_platform_checks"], 5)
+        self.assertEqual(report["core_platform_checks"], 7)
+        self.assertTrue(report["stage0_clock_provider_built_in"])
+        self.assertFalse(report["firmware_mif_clock_path_managed"])
         self.assertEqual(report["power_supply_options_checked"], 5)
         self.assertFalse(report["power_supply_optional_support_enabled"])
 
@@ -220,7 +223,16 @@ class ConfigTests(unittest.TestCase):
     def test_hidden_core_support_is_not_assumed(self):
         with self.assertRaisesRegex(ValueError, "CONFIG_CLKSRC_EXYNOS_MCT"):
             validate_config(self.actual.replace("CONFIG_CLKSRC_EXYNOS_MCT=y", ""),
-                            self.fragment, POWER_SUPPLY_KCONFIG)
+                             self.fragment, POWER_SUPPLY_KCONFIG)
+
+    def test_stage0_clock_provider_is_requested_and_required(self):
+        self.assertEqual(parse_config(self.fragment)["CONFIG_EXYNOS_7570_STAGE0_CLK"], "y")
+        for symbol in ("EXYNOS_7570_STAGE0_CLK", "COMMON_CLK_SAMSUNG"):
+            for value in ("", f"CONFIG_{symbol}=m", f"# CONFIG_{symbol} is not set"):
+                actual = self.actual.replace(f"CONFIG_{symbol}=y", value)
+                with self.subTest(symbol=symbol, value=value), self.assertRaisesRegex(
+                        ValueError, f"CONFIG_{symbol}"):
+                    validate_config(actual, self.fragment, POWER_SUPPLY_KCONFIG)
 
     def test_command_line_must_survive_exactly(self):
         with self.assertRaisesRegex(ValueError, "CONFIG_CMDLINE"):

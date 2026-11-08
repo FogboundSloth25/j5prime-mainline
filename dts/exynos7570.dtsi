@@ -73,6 +73,22 @@
 		#size-cells = <2>;
 		ranges;
 
+		cmu_mif: clock-controller@10460000 {
+			compatible = "samsung,exynos7570-cmu-mif-stage0";
+			reg = <0 0x10460000 0 0x1000>;
+			clocks = <&oscclk>;
+			clock-names = "oscclk";
+			#clock-cells = <0>;
+		};
+
+		cmu_peri: clock-controller@101f0000 {
+			compatible = "samsung,exynos7570-cmu-peri-stage0";
+			reg = <0 0x101f0000 0 0x1000>;
+			clocks = <&cmu_mif>;
+			clock-names = "peri-bus";
+			#clock-cells = <0>;
+		};
+
 		gic: interrupt-controller@104e1000 {
 			compatible = "arm,cortex-a15-gic";
 			reg = <0 0x104e1000 0 0x1000>,
@@ -100,12 +116,8 @@
 				     <GIC_SPI 111 IRQ_TYPE_LEVEL_HIGH>,
 				     <GIC_SPI 112 IRQ_TYPE_LEVEL_HIGH>,
 				     <GIC_SPI 113 IRQ_TYPE_LEVEL_HIGH>;
-			/*
-			 * Stage0 uses the oscillator for tick-rate lookup and an
-			 * inert gate handle. This inherits the MCT gate from S-Boot;
-			 * it is NOT an implemented Exynos7570 clock controller.
-			 */
-			clocks = <&oscclk>, <&oscclk>;
+			/* Tick input and managed PCLK gate are different clocks. */
+			clocks = <&oscclk>, <&cmu_peri>;
 			clock-names = "fin_pll", "mct";
 		};
 	};

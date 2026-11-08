@@ -1,2 +1,3 @@
 0001-arm-timer-exynos7570-counter-only.patch
 0002-exynos7570-stage0-bindings-and-dtb-target.patch
+0003-exynos7570-stage0-clock-providers.patch

@@ -42,13 +42,16 @@ monitoring, charging or a safe long-running phone system.
    the relocated loader's complete memory span, initramfs bounds and DTB
    placement. The previously tested loader-only fixed-address path is not
    equivalent to this relocation/embedded-kernel path.
-4. Add and host-test **runtime simplefb handoff**. Do not just set the
+4. Review and cross-build the host-tested **runtime simplefb handoff** in
+   the local uniLoader port. Do not just set the
    placeholder to `okay` or assume `0x67000000` from a command line. Reserve
    the actual scanout backing and reject overlap with Image, initrd, loader
    and known firmware regions.
-5. Verify the MCT clock gate's inherited state or implement a researched
-   Exynos7570 CMU driver. The initial fixed-clock handles satisfy the MCT
-   driver's clock lookup; they do not turn a disabled hardware gate on.
+5. Validate the narrow [stage0 clock providers](clock-stage0.md). The MCT
+   PCLK gate is managed, but its CMU_MIF bus path is firmware-owned and only
+   read/checked. A disabled or unstable parent is a failed diagnostic boot,
+   not permission to change shared PLLs or DRAM clocks. Host tests and a
+   successful build do not prove MMIO accessibility or the inherited state.
 6. Pack with an exact same-device Samsung Android boot wrapper and a DTBH
    table that covers **rev04**. The mainline DTB is embedded for Linux, not
    substituted for the old firmware-facing Samsung DTBH table.

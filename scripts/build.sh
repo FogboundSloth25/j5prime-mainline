@@ -40,6 +40,8 @@ while IFS= read -r patch; do
     run_logged "apply-$patch" git -C "$LINUX" apply --check "$REPO/patches/linux/$patch"
     git -C "$LINUX" apply "$REPO/patches/linux/$patch"
 done < patches/linux/series
+install -m 644 kernel/drivers/clk/samsung/clk-exynos7570-stage0.c \
+    "$LINUX/drivers/clk/samsung/"
 install -m 644 dts/exynos7570.dtsi dts/exynos7570-on5xelte-stage0.dts \
     "$LINUX/arch/arm64/boot/dts/exynos/"
 
@@ -74,6 +76,14 @@ SCHEMA_ENV=${RUNNER_TEMP:?}/j5prime-dtschema
 python3 -m venv "$SCHEMA_ENV"
 SCHEMA_VERSION=$(python3 -c 'import json; print(json.load(open("sources.lock.json"))["dtschema_version"])')
 run_logged schema-install "$SCHEMA_ENV/bin/pip" install "dtschema==$SCHEMA_VERSION"
+"$SCHEMA_ENV/bin/dt-doc-validate" \
+    "$LINUX/Documentation/devicetree/bindings/clock/samsung,exynos7570-stage0-clock.yaml" \
+    > "$REPORTS/schema-doc-validation.log" 2>&1
+if [[ -s $REPORTS/schema-doc-validation.log ]]; then
+    cat -- "$REPORTS/schema-doc-validation.log" >&2
+    echo 'Local clock binding diagnostics are not silently accepted.' >&2
+    exit 1
+fi
 "$SCHEMA_ENV/bin/dt-mk-schema" -j "$LINUX/Documentation/devicetree/bindings" \
     > "$WORK/processed-schema.json" 2> "$LOGS/schema-compile.log"
 "$SCHEMA_ENV/bin/dt-validate" -s "$WORK/processed-schema.json" \

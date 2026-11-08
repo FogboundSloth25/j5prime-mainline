@@ -64,7 +64,8 @@ def validate_config(actual_text: str, fragment_text: str,
             errors.append(f"{key}: requested {wanted}, resolved {value}")
     # These hidden/core symbols must be selected, not merely assumed.
     for key in ("CONFIG_ARM_GIC", "CONFIG_ARM_PSCI_FW", "CONFIG_ARM_ARCH_TIMER",
-                "CONFIG_CLKSRC_EXYNOS_MCT", "CONFIG_COMMON_CLK"):
+                "CONFIG_CLKSRC_EXYNOS_MCT", "CONFIG_COMMON_CLK",
+                "CONFIG_COMMON_CLK_SAMSUNG", "CONFIG_EXYNOS_7570_STAGE0_CLK"):
         if actual.get(key) != "y":
             errors.append(f"{key}: required built-in platform support is missing")
     # POWER_SUPPLY itself is mandatory on ARM64, but stage0 must not enable
@@ -74,9 +75,11 @@ def validate_config(actual_text: str, fragment_text: str,
             errors.append(f"{key}: optional power-supply support must be disabled in stage0")
     if errors:
         raise ValueError("Kconfig checks failed:\n" + "\n".join(errors))
-    return {"requested_options_checked": len(requested), "core_platform_checks": 5,
+    return {"requested_options_checked": len(requested), "core_platform_checks": 7,
             "power_supply_options_checked": len(supply_options),
-            "power_supply_optional_support_enabled": False}
+            "power_supply_optional_support_enabled": False,
+            "stage0_clock_provider_built_in": True,
+            "firmware_mif_clock_path_managed": False}
 
 
 def validate_image(image: bytes) -> dict:
@@ -202,6 +205,12 @@ def _fdt(path: Path, node: str, prop: str, kind: str = "x") -> list:
     return result.stdout.strip().split()
 
 
+def _fdt_properties(path: Path, node: str) -> list[str]:
+    result = subprocess.run(["fdtget", "-p", str(path), node],
+                            check=True, capture_output=True, text=True)
+    return result.stdout.split()
+
+
 def validate_dtb(path: Path) -> dict:
     checks = {
         ("/", "compatible", "s"): ["samsung,on5xelte", "samsung,exynos7570"],
@@ -209,6 +218,18 @@ def validate_dtb(path: Path) -> dict:
         ("/", "#size-cells", "x"): [2],
         ("/memory@40000000", "reg", "x"): [0, 0x40000000, 0, 0x20000000],
         ("/clock-osc", "clock-frequency", "x"): [26000000],
+        ("/clock-osc", "compatible", "s"): ["fixed-clock"],
+        ("/clock-osc", "#clock-cells", "x"): [0],
+        ("/soc/clock-controller@10460000", "compatible", "s"):
+            ["samsung,exynos7570-cmu-mif-stage0"],
+        ("/soc/clock-controller@10460000", "reg", "x"): [0, 0x10460000, 0, 0x1000],
+        ("/soc/clock-controller@10460000", "#clock-cells", "x"): [0],
+        ("/soc/clock-controller@10460000", "clock-names", "s"): ["oscclk"],
+        ("/soc/clock-controller@101f0000", "compatible", "s"):
+            ["samsung,exynos7570-cmu-peri-stage0"],
+        ("/soc/clock-controller@101f0000", "reg", "x"): [0, 0x101F0000, 0, 0x1000],
+        ("/soc/clock-controller@101f0000", "#clock-cells", "x"): [0],
+        ("/soc/clock-controller@101f0000", "clock-names", "s"): ["peri-bus"],
         ("/psci", "compatible", "s"): ["arm,psci"],
         ("/psci", "method", "s"): ["smc"],
         ("/psci", "cpu_suspend", "x"): [0xC4000001],
@@ -222,6 +243,7 @@ def validate_dtb(path: Path) -> dict:
         ("/soc/timer@101b0000", "compatible", "s"):
             ["samsung,exynos7570-mct", "samsung,exynos4210-mct"],
         ("/soc/timer@101b0000", "reg", "x"): [0, 0x101B0000, 0, 0x800],
+        ("/soc/timer@101b0000", "clock-names", "s"): ["fin_pll", "mct"],
         ("/soc/timer@101b0000", "interrupts", "x"):
             [cell for spi in range(102, 114) for cell in (0, spi, 4)],
         ("/reserved-memory/firmware-logs@46000000", "reg", "x"):
@@ -239,6 +261,30 @@ def validate_dtb(path: Path) -> dict:
     for (node, prop, kind), expected in checks.items():
         if _fdt(path, node, prop, kind) != expected:
             raise ValueError(f"DTB mismatch: {node}:{prop}")
+    # Follow the actual zero-cell phandles, not numeric values assumed from
+    # a particular dtc run: fin_pll is the oscillator; mct is the managed gate.
+    clock_nodes = ("/clock-osc", "/soc/clock-controller@10460000",
+                   "/soc/clock-controller@101f0000")
+    handles = []
+    for node in clock_nodes:
+        handle = _fdt(path, node, "phandle")
+        if len(handle) != 1 or not 0 < handle[0] < 0xFFFFFFFF:
+            raise ValueError(f"DTB invalid clock phandle: {node}")
+        handles.append(handle[0])
+        properties = _fdt_properties(path, node)
+        if "status" in properties and _fdt(path, node, "status", "s") not in (
+                ["okay"], ["ok"]):
+            raise ValueError(f"DTB clock provider is unavailable: {node}")
+        if node != "/clock-osc" and "clock-frequency" in properties:
+            raise ValueError("DTB must not invent a fixed PERI bus/PCLK frequency")
+    if len(set(handles)) != len(handles):
+        raise ValueError("DTB clock-provider phandles must be distinct")
+    osc, mif, peri = handles
+    relationships = {clock_nodes[1]: [osc], clock_nodes[2]: [mif],
+                     "/soc/timer@101b0000": [osc, peri]}
+    for node, expected in relationships.items():
+        if _fdt(path, node, "clocks") != expected:
+            raise ValueError(f"DTB clock relationship mismatch: {node}")
     for index in range(4):
         if _fdt(path, f"/cpus/cpu@{index}", "reg") != [0, index]:
             raise ValueError("DTB CPU affinity does not match Exynos7570")
@@ -250,6 +296,9 @@ def validate_dtb(path: Path) -> dict:
         if forbidden in bootargs:
             raise ValueError("DTB contains downstream or unvalidated early-console arguments")
     return {"property_checks": len(checks), "cpu_checks": 4,
+            "clock_relationship_checks": len(relationships),
+            "mct_tick_uses_oscillator": True, "mct_pclk_uses_managed_gate": True,
+            "firmware_mif_clock_path_managed": False,
             "framebuffer_enabled": False, "usable_dram_bytes": 512 * 1024 * 1024,
             "hardware_boot_tested": False}
 

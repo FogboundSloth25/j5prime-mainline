@@ -22,7 +22,10 @@ Exynos MCT and simple-framebuffer drivers are reused where appropriate.
 - PSCI **v0.1** function IDs from the working device, not assumed PSCI v0.2.
 - Architected counter at 26 MHz; MCT clockevents. A local, unsubmitted timer
   quirk preserves the downstream counter/clockevent split without assuming
-  that architected timer interrupts work under the stock firmware.
+   that architected timer interrupts work under the stock firmware.
+- Narrow, independently written stage0 clock providers: manage only the MCT
+  PCLK gate, and validate its inherited CMU_MIF parent without configuring
+  shared PLLs, muxes, dividers or DRAM clocks.
 - Linux simplefb/fbcon using the live framebuffer left by S-Boot. The DTB's
   placeholder is **disabled** until uniLoader validates and patches it.
 - A small, static, independently written `/init` using upstream nolibc.
@@ -31,9 +34,15 @@ Exynos MCT and simple-framebuffer drivers are reused where appropriate.
 
 There is **no eMMC/SD, USB/ADB, Wi-Fi, modem, touchscreen, full display driver,
 PMIC, charging, battery monitoring or thermal management** in this stage.
-The MCT clock gate is initially inherited from firmware, not managed by a
-finished Exynos7570 CMU driver. These are bring-up assumptions, not verified
-device functionality. See [`docs/bringup.md`](docs/bringup.md).
+The stage0 clock code is not a complete Exynos7570 CMU driver. Its register
+mapping, inherited clock path and MMIO accessibility remain untested on this
+phone. See [`docs/clock-stage0.md`](docs/clock-stage0.md) and
+[`docs/bringup.md`](docs/bringup.md).
+
+The first upstream component build passed in
+[Actions run 42510220119](https://github.com/FogboundSloth25/j5prime-mainline/actions/runs/42510220119)
+at commit `342acc70e3fc23d2ac21f6537ce3a4e5600aa729`. That build predates the
+managed clock providers and is a compilation milestone, **not a Linux boot**.
 
 ## Build on GitHub Actions, not the slow local PC
 
@@ -57,8 +66,11 @@ locally without a kernel build or a connected phone:
 python3 -m unittest discover -s tests -v
 ```
 
-Tests use only synthetic Image/ELF/archive fixtures. Python 3.12 or newer is
-required for safe source-archive extraction. The initramfs gzip header has
+Tests use synthetic Image/ELF/archive/register fixtures and this repository's
+DTS, not device dumps. They require a host C compiler with ASan/UBSan runtimes
+and the DTC tools (`dtc`, `fdtget`, `fdtput`). Set `HOSTCC=clang` to use Clang
+instead of GCC. Python 3.12 or newer is required for safe source-archive
+extraction. The initramfs gzip header has
 no host filename or timestamp and is stable across supported Python versions.
 
 The workflow uses read-only repository permissions and does not need a PAT.
@@ -87,6 +99,7 @@ private GitHub credentials or prebuilt phone images.
 | --- | --- |
 | `dts/` | New minimal SoC and rev04 diagnostic board descriptions |
 | `patches/linux/` | Local changes to pinned upstream Linux and its bindings |
+| `kernel/` | Independently written local driver source installed into upstream |
 | `configs/` | Stage0 kernel configuration, checked after Kconfig resolution |
 | `initramfs/` | Static diagnostic userspace source, no Android ramdisk |
 | `scripts/`, `tests/` | CI build, artifact validation and host-only tests |
