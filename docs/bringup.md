@@ -13,6 +13,24 @@ The source is kept intentionally small: it is not a copied Android DTB,
 not a complete clock tree, and not a claim of upstream-ready bindings.
 The timer quirk and all new compatible strings are local and unsubmitted.
 
+## Mandatory power-supply class, not charging support
+
+Pinned upstream [`arch/arm64/Kconfig`](https://github.com/gregkh/linux/blob/d50d994bffa3c7c6db2d8bc4c5f0c55e3f46b0cd/arch/arm64/Kconfig)
+unconditionally selects `POWER_SUPPLY` (and `POWER_RESET`). Even
+`allnoconfig` therefore has the power-supply class built in; requesting
+`CONFIG_POWER_SUPPLY=n` cannot survive Kconfig resolution. Stage0 explicitly
+requests `CONFIG_POWER_SUPPLY=y` rather than patching the architecture or
+ignoring a configuration mismatch.
+
+The class initialization only registers the generic class. Battery/charger
+support requires separate drivers. CI inventories **every other symbol** in
+the pinned upstream `drivers/power/supply/Kconfig` and requires it to be
+disabled, including test devices and optional debug/hwmon helpers. Unexpected
+Kconfig includes fail validation rather than hiding a partial inventory.
+The strict fragment check remains in place, and regulators, I2C, USB, thermal
+and power management are still disabled. This does not provide battery
+monitoring, charging or a safe long-running phone system.
+
 ## Required before a Linux device test
 
 1. Retrieve a successful CI run's artifacts; verify `SHA256SUMS` and retain

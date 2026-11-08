@@ -3,11 +3,30 @@
 import os
 import struct
 import subprocess
+import sys
 import unittest
 
 from scripts.validate import (PAYLOAD_ENTRY, TIMA_START, parse_config,
                               validate_config, validate_image, validate_init_elf)
 from tests.support import ROOT, synthetic_elf, synthetic_image
+
+
+POWER_SUPPLY_KCONFIG = """# Synthetic registry, not an upstream Kconfig copy.
+menuconfig POWER_SUPPLY
+    bool "Synthetic class"
+if POWER_SUPPLY
+config POWER_SUPPLY_DEBUG
+    bool
+config POWER_SUPPLY_HWMON
+    bool
+config BATTERY_FIXTURE
+    tristate
+config CHARGER_FIXTURE
+    tristate
+config SUPPLY_FIXTURE_HELPER
+    tristate
+endif
+"""
 
 
 class ImageTests(unittest.TestCase):
@@ -167,9 +186,11 @@ class ConfigTests(unittest.TestCase):
         self.actual = self.fragment + "\n" + self.core + "\n"
 
     def test_strict_fragment_and_core_selection(self):
-        report = validate_config(self.actual, self.fragment)
+        report = validate_config(self.actual, self.fragment, POWER_SUPPLY_KCONFIG)
         self.assertGreater(report["requested_options_checked"], 50)
         self.assertEqual(report["core_platform_checks"], 5)
+        self.assertEqual(report["power_supply_options_checked"], 5)
+        self.assertFalse(report["power_supply_optional_support_enabled"])
 
     def test_quote_and_disabled_value_parsing(self):
         config = parse_config('CONFIG_TEXT="has spaces"\n# CONFIG_NET is not set\n')
@@ -184,27 +205,78 @@ class ConfigTests(unittest.TestCase):
 
     def test_requested_enabled_option_cannot_disappear(self):
         with self.assertRaisesRegex(ValueError, "CONFIG_FB_SIMPLE"):
-            validate_config(self.actual.replace("CONFIG_FB_SIMPLE=y", ""), self.fragment)
+            validate_config(self.actual.replace("CONFIG_FB_SIMPLE=y", ""), self.fragment,
+                            POWER_SUPPLY_KCONFIG)
 
     def test_requested_disabled_option_cannot_be_enabled(self):
         with self.assertRaisesRegex(ValueError, "CONFIG_MMC"):
-            validate_config(self.actual.replace("# CONFIG_MMC is not set", "CONFIG_MMC=y"), self.fragment)
+            validate_config(self.actual.replace("# CONFIG_MMC is not set", "CONFIG_MMC=y"),
+                            self.fragment, POWER_SUPPLY_KCONFIG)
 
     def test_absent_disabled_option_is_off(self):
         actual = self.actual.replace("# CONFIG_MMC is not set", "")
-        validate_config(actual, self.fragment)
+        validate_config(actual, self.fragment, POWER_SUPPLY_KCONFIG)
 
     def test_hidden_core_support_is_not_assumed(self):
         with self.assertRaisesRegex(ValueError, "CONFIG_CLKSRC_EXYNOS_MCT"):
-            validate_config(self.actual.replace("CONFIG_CLKSRC_EXYNOS_MCT=y", ""), self.fragment)
+            validate_config(self.actual.replace("CONFIG_CLKSRC_EXYNOS_MCT=y", ""),
+                            self.fragment, POWER_SUPPLY_KCONFIG)
 
     def test_command_line_must_survive_exactly(self):
         with self.assertRaisesRegex(ValueError, "CONFIG_CMDLINE"):
-            validate_config(self.actual.replace("maxcpus=1", "maxcpus=4"), self.fragment)
+            validate_config(self.actual.replace("maxcpus=1", "maxcpus=4"), self.fragment,
+                            POWER_SUPPLY_KCONFIG)
 
     def test_empty_fragment_is_not_a_validation(self):
         with self.assertRaisesRegex(ValueError, "empty"):
-            validate_config(self.core, "# empty\n")
+            validate_config(self.core, "# empty\n", POWER_SUPPLY_KCONFIG)
+
+    def test_mandatory_supply_class_is_requested_and_checked(self):
+        self.assertEqual(parse_config(self.fragment)["CONFIG_POWER_SUPPLY"], "y")
+        with self.assertRaisesRegex(ValueError, "CONFIG_POWER_SUPPLY"):
+            validate_config(self.actual.replace("CONFIG_POWER_SUPPLY=y", ""),
+                            self.fragment, POWER_SUPPLY_KCONFIG)
+
+    def test_supply_optional_support_cannot_be_builtin_or_module(self):
+        for symbol in ("POWER_SUPPLY_DEBUG", "POWER_SUPPLY_HWMON", "BATTERY_FIXTURE",
+                       "CHARGER_FIXTURE", "SUPPLY_FIXTURE_HELPER"):
+            for value in ("y", "m"):
+                actual = self.actual + f"CONFIG_{symbol}={value}\n"
+                with self.subTest(symbol=symbol, value=value), self.assertRaisesRegex(
+                        ValueError, f"CONFIG_{symbol}: optional power-supply"):
+                    validate_config(actual, self.fragment, POWER_SUPPLY_KCONFIG)
+
+    def test_explicitly_disabled_supply_option_is_allowed(self):
+        actual = self.actual + "# CONFIG_BATTERY_FIXTURE is not set\n"
+        validate_config(actual, self.fragment, POWER_SUPPLY_KCONFIG)
+
+    def test_indented_supply_option_is_not_ignored(self):
+        inventory = POWER_SUPPLY_KCONFIG.replace("config SUPPLY_FIXTURE_HELPER",
+                                                 "\tconfig SUPPLY_FIXTURE_HELPER")
+        actual = self.actual + "CONFIG_SUPPLY_FIXTURE_HELPER=y\n"
+        with self.assertRaisesRegex(ValueError, "CONFIG_SUPPLY_FIXTURE_HELPER"):
+            validate_config(actual, self.fragment, inventory)
+
+    def test_incomplete_supply_inventory_is_not_accepted(self):
+        for inventory in ("", "config POWER_SUPPLY\n", "config BATTERY_FIXTURE\n",
+                          POWER_SUPPLY_KCONFIG + "config BATTERY_FIXTURE\n"):
+            with self.subTest(inventory=inventory), self.assertRaisesRegex(
+                    ValueError, "Kconfig inventory"):
+                validate_config(self.actual, self.fragment, inventory)
+
+    def test_split_supply_inventory_is_not_silently_ignored(self):
+        for directive in ("source", "rsource", "osource", "orsource"):
+            inventory = POWER_SUPPLY_KCONFIG + f'{directive} "another/Kconfig"\n'
+            with self.subTest(directive=directive), self.assertRaisesRegex(
+                    ValueError, "unsupported includes"):
+                validate_config(self.actual, self.fragment, inventory)
+
+    def test_config_cli_requires_supply_inventory(self):
+        result = subprocess.run([sys.executable, "-m", "scripts.validate", "config",
+                                 "not-read.config", "not-read.fragment"], cwd=ROOT,
+                                capture_output=True, text=True, timeout=5)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("requires the upstream power-supply Kconfig inventory", result.stderr)
 
 
 class LocalBuildGuardTests(unittest.TestCase):

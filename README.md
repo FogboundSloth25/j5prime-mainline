@@ -48,7 +48,9 @@ gh run download RUN_ID --repo FogboundSloth25/j5prime-mainline \
 
 CI cross-compiles the kernel and `/init`, compiles the board DTB, checks the
 requested kernel configuration and ARM64 load limits, validates the DTB,
-and uploads checksummed build components and logs. Host-only tests can run
+and uploads checksummed build components and logs. The mandatory ARM64
+power-supply class is allowed, but all of its optional support is checked
+disabled; this is not charging or battery support. Host-only tests can run
 locally without a kernel build or a connected phone:
 
 ```sh

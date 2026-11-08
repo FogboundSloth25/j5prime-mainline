@@ -60,6 +60,7 @@ run_logged merge-config bash "$LINUX/scripts/kconfig/merge_config.sh" -m -O "$KE
 run_logged olddefconfig make -C "$LINUX" O="$KERNEL_OUT" olddefconfig
 cp -- "$KERNEL_OUT/.config" "$DIST/kernel.config"
 python3 -m scripts.validate config "$DIST/kernel.config" configs/on5xelte-stage0.config \
+    --power-supply-kconfig "$LINUX/drivers/power/supply/Kconfig" \
     > "$REPORTS/config.json"
 
 run_logged dtb make -C "$LINUX" O="$KERNEL_OUT" -j"$(nproc)" \

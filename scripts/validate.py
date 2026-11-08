@@ -37,10 +37,26 @@ def parse_config(text: str) -> dict:
     return result
 
 
-def validate_config(actual_text: str, fragment_text: str) -> dict:
+def power_supply_options(kconfig_text: str) -> list[str]:
+    # Inventory only, not a Kconfig evaluator. The actual values have already
+    # been resolved by upstream olddefconfig. Refuse includes rather than
+    # silently validating an incomplete list if upstream splits this file.
+    if re.search(r"^\s*(?:source|rsource|osource|orsource)\s+", kconfig_text, re.MULTILINE):
+        raise ValueError("power-supply Kconfig inventory contains unsupported includes")
+    symbols = re.findall(r"^[ \t]*(?:menu)?config[ \t]+([A-Za-z0-9_]+)[ \t]*$",
+                         kconfig_text, re.MULTILINE)
+    if ("POWER_SUPPLY" not in symbols or len(symbols) < 2
+            or len(set(symbols)) != len(symbols)):
+        raise ValueError("invalid or incomplete power-supply Kconfig inventory")
+    return sorted("CONFIG_" + symbol for symbol in symbols if symbol != "POWER_SUPPLY")
+
+
+def validate_config(actual_text: str, fragment_text: str,
+                    power_supply_kconfig_text: str) -> dict:
     actual, requested = parse_config(actual_text), parse_config(fragment_text)
     if not requested:
         raise ValueError("requested config fragment is empty")
+    supply_options = power_supply_options(power_supply_kconfig_text)
     errors = []
     for key, wanted in requested.items():
         value = actual.get(key, "n")
@@ -51,9 +67,16 @@ def validate_config(actual_text: str, fragment_text: str) -> dict:
                 "CONFIG_CLKSRC_EXYNOS_MCT", "CONFIG_COMMON_CLK"):
         if actual.get(key) != "y":
             errors.append(f"{key}: required built-in platform support is missing")
+    # POWER_SUPPLY itself is mandatory on ARM64, but stage0 must not enable
+    # any of its optional drivers, test devices, debug or hwmon helpers.
+    for key in supply_options:
+        if actual.get(key, "n") != "n":
+            errors.append(f"{key}: optional power-supply support must be disabled in stage0")
     if errors:
         raise ValueError("Kconfig checks failed:\n" + "\n".join(errors))
-    return {"requested_options_checked": len(requested), "core_platform_checks": 5}
+    return {"requested_options_checked": len(requested), "core_platform_checks": 5,
+            "power_supply_options_checked": len(supply_options),
+            "power_supply_optional_support_enabled": False}
 
 
 def validate_image(image: bytes) -> dict:
@@ -236,12 +259,17 @@ def main() -> None:
     parser.add_argument("kind", choices=("image", "elf", "initramfs", "config", "dtb"))
     parser.add_argument("path", type=Path)
     parser.add_argument("fragment", type=Path, nargs="?")
+    parser.add_argument("--power-supply-kconfig", type=Path,
+                        help="pinned upstream drivers/power/supply/Kconfig (required for config)")
     args = parser.parse_args()
     try:
         if args.kind == "config":
             if args.fragment is None:
                 parser.error("config validation requires the requested fragment")
-            report = validate_config(args.path.read_text(), args.fragment.read_text())
+            if args.power_supply_kconfig is None:
+                parser.error("config validation requires the upstream power-supply Kconfig inventory")
+            report = validate_config(args.path.read_text(), args.fragment.read_text(),
+                                     args.power_supply_kconfig.read_text())
         elif args.kind == "dtb":
             report = validate_dtb(args.path)
         else:
