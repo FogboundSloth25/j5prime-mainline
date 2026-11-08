@@ -1,0 +1,2 @@
+# Unified diffs intentionally contain a context prefix before tabs/blanks.
+patches/linux/*.patch whitespace=-blank-at-eol,-space-before-tab

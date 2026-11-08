@@ -1,0 +1,65 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/* SM-G570F SWA rev04 diagnostic board; not a complete phone description. */
+
+/dts-v1/;
+
+#include "exynos7570.dtsi"
+
+/ {
+	model = "Samsung Galaxy J5 Prime SM-G570F (on5xelte rev04 stage0)";
+	compatible = "samsung,on5xelte", "samsung,exynos7570";
+
+	aliases {
+		display0 = &framebuffer0;
+	};
+
+	chosen {
+		#address-cells = <2>;
+		#size-cells = <2>;
+		stdout-path = "display0";
+		bootargs = "console=tty0 consoleblank=0 loglevel=8 ignore_loglevel initcall_debug clk_ignore_unused nokaslr maxcpus=1 panic=0 rdinit=/init";
+
+		/*
+		 * Placeholder only. uniLoader must validate the live surface,
+		 * replace every mode property, reserve the scanout backing and
+		 * update this node's address/alias BEFORE enabling it.
+		 */
+		framebuffer0: framebuffer@67000000 {
+			compatible = "simple-framebuffer";
+			reg = <0 0x67000000 0 0x384000>;
+			width = <720>;
+			height = <1280>;
+			stride = <2880>;
+			format = "a8r8g8b8";
+			status = "disabled";
+		};
+	};
+
+	/* Stage0 intentionally exposes only the first 512 MiB of real DRAM. */
+	memory@40000000 {
+		device_type = "memory";
+		reg = <0 0x40000000 0 0x20000000>;
+	};
+
+	reserved-memory {
+		#address-cells = <2>;
+		#size-cells = <2>;
+		ranges;
+
+		/* Conservative cover for observed low Samsung debug-log areas. */
+		firmware-logs@46000000 {
+			reg = <0 0x46000000 0 0x01000000>;
+			no-map;
+		};
+
+		/* Retain mapping: the embedded DTB may reside in this region. */
+		loader@47000000 {
+			reg = <0 0x47000000 0 0x02000000>;
+		};
+
+		tima-log@52800000 {
+			reg = <0 0x52800000 0 0x00200000>;
+			no-map;
+		};
+	};
+};

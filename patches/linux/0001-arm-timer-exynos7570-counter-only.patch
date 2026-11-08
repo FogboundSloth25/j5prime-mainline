@@ -1,0 +1,116 @@
+Subject: [LOCAL, EXPERIMENTAL] clocksource: retain counter-only Exynos7570 bring-up
+
+Written against upstream v7.3.3. The working SM-G570F recovery separates
+architected clocksource and MCT clockevents. Upstream does not implement
+its downstream-only DT flags; preserve the split with a local compatible.
+
+Keep counter frequency, vDSO/user counter access and CPU PM setup, but do
+not request/enable architected timer interrupts. Do not advertise those
+unvalidated interrupts to KVM. This is an initial bring-up policy, not
+evidence that the hardware's architected timer PPIs are defective.
+
+This patch is independently written, unsubmitted and not upstream-reviewed.
+
+diff --git a/drivers/clocksource/arm_arch_timer.c b/drivers/clocksource/arm_arch_timer.c
+--- a/drivers/clocksource/arm_arch_timer.c
++++ b/drivers/clocksource/arm_arch_timer.c
+@@ -52,6 +52,7 @@
+ };
+ 
+ static struct clock_event_device __percpu *arch_timer_evt;
++static bool arch_timer_counter_only __ro_after_init;
+ 
+ static enum arch_timer_ppi_nr arch_timer_uses_ppi __ro_after_init = ARCH_TIMER_VIRT_PPI;
+ static bool arch_timer_c3stop __ro_after_init;
+@@ -801,6 +802,13 @@
+ 	arch_timer_set_cntkctl(cntkctl);
+ }
+ 
++/* Counter access must still be configured when clockevents use MCT. */
++static int arch_counter_only_starting_cpu(unsigned int cpu)
++{
++	arch_counter_set_user_access();
++	return 0;
++}
++
+ static bool arch_timer_has_nonsecure_ppi(void)
+ {
+ 	return (arch_timer_uses_ppi == ARCH_TIMER_PHYS_SECURE_PPI &&
+@@ -1079,6 +1087,25 @@
+ 	return err;
+ }
+ 
++static int __init arch_counter_only_register(void)
++{
++	int ret;
++
++	ret = arch_timer_cpu_pm_init();
++	if (ret)
++		return ret;
++
++	ret = cpuhp_setup_state(CPUHP_AP_ARM_ARCH_TIMER_STARTING,
++				"clocksource/arm/arch_counter:starting",
++				arch_counter_only_starting_cpu, NULL);
++	if (ret)
++		arch_timer_cpu_pm_deinit();
++	else
++		arch_timer_counter_only = true;
++
++	return ret;
++}
++
+ static int __init arch_timer_common_init(void)
+ {
+ 	arch_timer_banner();
+@@ -1162,7 +1189,7 @@
+ 	u32 rate;
+ 	bool has_names;
+ 
+-	if (arch_timer_evt) {
++	if (arch_timer_evt || arch_timer_counter_only) {
+ 		pr_warn("multiple nodes in dt, skipping\n");
+ 		return 0;
+ 	}
+@@ -1207,7 +1234,19 @@
+ 	arch_counter_suspend_stop = of_property_read_bool(np,
+ 							 "arm,no-tick-in-suspend");
+ 
+-	ret = arch_timer_register();
++	/*
++	 * The working Exynos7570 downstream setup uses MCT clockevents.
++	 * Keep that split during stock-firmware bring-up; this does not
++	 * establish that the architected timer PPIs are defective.
++	 */
++	if (of_device_is_compatible(np, "samsung,exynos7570-timer")) {
++		arch_timer_kvm_info.virtual_irq = 0;
++		arch_timer_kvm_info.physical_irq = 0;
++		ret = arch_counter_only_register();
++		pr_info("Exynos7570 counter-only bring-up; MCT clockevents required\n");
++	} else {
++		ret = arch_timer_register();
++	}
+ 	if (ret)
+ 		return ret;
+ 
+@@ -1221,7 +1260,7 @@
+ {
+ 	int ret;
+ 
+-	if (arch_timer_evt) {
++	if (arch_timer_evt || arch_timer_counter_only) {
+ 		pr_warn("already initialized, skipping\n");
+ 		return -EINVAL;
+ 	}
+diff --git a/Documentation/devicetree/bindings/timer/arm,arch_timer.yaml b/Documentation/devicetree/bindings/timer/arm,arch_timer.yaml
+--- a/Documentation/devicetree/bindings/timer/arm,arch_timer.yaml
++++ b/Documentation/devicetree/bindings/timer/arm,arch_timer.yaml
+@@ -19,6 +19,9 @@
+       - items:
+           - const: arm,cortex-a15-timer
+           - const: arm,armv7-timer
++      - items:
++          - const: samsung,exynos7570-timer
++          - const: arm,armv8-timer
+       - items:
+           - enum:
+               - arm,armv7-timer

@@ -1,0 +1,12 @@
+{
+  "format": 1,
+  "linux": {
+    "version": "7.3.3",
+    "tag": "v7.3.3",
+    "git_url": "https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git",
+    "commit": "d50d994bffa3c7c6db2d8bc4c5f0c55e3f46b0cd",
+    "archive_url": "https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.3.3.tar.xz",
+    "archive_sha256": "79c66dde66cd96877fcde8f7d36aec946b1f423d2b97b5a7b1751b75c764f3d1"
+  },
+  "dtschema_version": "2026.9"
+}

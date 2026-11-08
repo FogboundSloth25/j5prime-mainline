@@ -1,0 +1,79 @@
+# Stage0 limits and boot contract
+
+## What a build proves
+
+CI success means that the pinned upstream kernel plus this patch series
+compiled, the selected configuration survived Kconfig, and the component
+artifacts passed the documented host checks. It does **not** prove that
+S-Boot loads this kernel, interrupts fire, the framebuffer survives, or
+`/init` runs. Hardware status must be recorded separately after an approved
+device experiment.
+
+The source is kept intentionally small: it is not a copied Android DTB,
+not a complete clock tree, and not a claim of upstream-ready bindings.
+The timer quirk and all new compatible strings are local and unsubmitted.
+
+## Required before a Linux device test
+
+1. Retrieve a successful CI run's artifacts; verify `SHA256SUMS` and retain
+   its repository SHA, source lock, resolved configuration and build report.
+2. Inspect the actual ARM64 Image header. The planned `0x50000000` entry
+   must meet its alignment/text-offset requirements, and its required memory
+   must not overlap the TIMA reservation at `0x52800000`.
+3. Integrate with the selected uniLoader fork and its on5xelte port. Check
+   the relocated loader's complete memory span, initramfs bounds and DTB
+   placement. The previously tested loader-only fixed-address path is not
+   equivalent to this relocation/embedded-kernel path.
+4. Add and host-test **runtime simplefb handoff**. Do not just set the
+   placeholder to `okay` or assume `0x67000000` from a command line. Reserve
+   the actual scanout backing and reject overlap with Image, initrd, loader
+   and known firmware regions.
+5. Verify the MCT clock gate's inherited state or implement a researched
+   Exynos7570 CMU driver. The initial fixed-clock handles satisfy the MCT
+   driver's clock lookup; they do not turn a disabled hardware gate on.
+6. Pack with an exact same-device Samsung Android boot wrapper and a DTBH
+   table that covers **rev04**. The mainline DTB is embedded for Linux, not
+   substituted for the old firmware-facing Samsung DTBH table.
+7. Check PIT target/size, preserve the known-working RECOVERY/TWRP image,
+   retain verified host rollback backups, and obtain separate approval of
+   the experimental image and partition before **any** phone write.
+
+This repository intentionally has no flash command or downloadable Android
+BOOT image. Device backups must not be used as public CI inputs.
+
+## Diagnostic output
+
+The kernel is configured for `console=tty0`, verbose initcalls, no KASLR,
+no console blanking and no automatic panic reboot. It does not depend on
+UART output: enabling an unvalidated early UART can itself hang a boot.
+The force-selected clean kernel command line prevents Android debug/log
+arguments from becoming the Linux configuration.
+
+The external gzip/newc initramfs contains only a static `/init`, virtual
+filesystem mountpoints and console/kmsg device nodes. `/init` refuses to
+run unless it is PID 1, mounts only proc/sysfs/devtmpfs, prints:
+
+```text
+MAINLINE_STAGE0_USERSPACE_OK
+```
+
+and emits a heartbeat every five seconds. It does not start a shell, mount
+storage, bring up USB, contact the network, change regulators or invoke
+reboot/poweroff. A marker plus advancing heartbeats is stronger evidence
+than a kernel logo, but is still not a full phone port.
+
+If the framebuffer handoff is not applied, the kernel may run with no
+visible console. If the MCT gate or interrupt setup is wrong, it may stall
+before userspace. A blank screen alone cannot distinguish those failures.
+
+## Safety
+
+There is no Linux charging, thermal protection policy or battery gauge in
+this build. Do not leave a future diagnostic boot running unattended or
+use it as a daily system. Do not assume the stock hardware charger/watchdog
+state is suitable for extended testing. Return promptly to known-working
+recovery using the established hardware buttons.
+
+Future work is proper CMU/pinctrl support and timer validation, then USB
+diagnostics, PMIC/power/thermal support, and only later storage and native
+display/input drivers. None of those is implied by the initial build.

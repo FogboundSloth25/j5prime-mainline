@@ -1,0 +1,6 @@
+# Generated output, downloaded upstream sources and Python caches only.
+/out/
+/dist/
+/.venv/
+__pycache__/
+*.pyc

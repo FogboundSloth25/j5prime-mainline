@@ -1,0 +1,71 @@
+name: Mainline stage0
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mainline-stage0-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: SM-G570F upstream diagnostic components
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout port sources
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install host and AArch64 build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            bc bison flex build-essential gcc-aarch64-linux-gnu \
+            libc6-dev-arm64-cross libssl-dev libelf-dev \
+            device-tree-compiler xz-utils python3-venv python3-dev swig cpio
+
+      - name: Run host-only tests
+        run: python3 -m unittest discover -s tests -v
+
+      - name: Build and validate pinned upstream kernel
+        run: bash scripts/build.sh
+
+      - name: Upload corresponding upstream and port sources
+        if: success()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: on5xelte-stage0-source-${{ github.run_id }}
+          path: out/source/
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload checked build components (not a flash image)
+        if: success()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: on5xelte-stage0-${{ github.run_id }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload diagnostic logs even on failure
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: stage0-logs-${{ github.run_id }}
+          path: |
+            out/logs/
+            out/reports/
+            dist/kernel.config
+          if-no-files-found: warn
+          retention-days: 14

@@ -1,0 +1,53 @@
+Subject: [LOCAL, EXPERIMENTAL] dt-bindings: describe Exynos7570 stage0 target
+
+Add the independently written SM-G570F board compatible, the hardware's
+Exynos4210-compatible MCT instance and the diagnostic DTB build target.
+The new DTS/DTSI sources are supplied from this repository's dts/ directory.
+This is not a complete SoC binding or an upstream-reviewed board port.
+
+diff --git a/Documentation/devicetree/bindings/arm/samsung/samsung-boards.yaml b/Documentation/devicetree/bindings/arm/samsung/samsung-boards.yaml
+--- a/Documentation/devicetree/bindings/arm/samsung/samsung-boards.yaml
++++ b/Documentation/devicetree/bindings/arm/samsung/samsung-boards.yaml
+@@ -213,6 +213,12 @@
+               - samsung,exynos7-espresso        # Samsung Exynos7 Espresso
+           - const: samsung,exynos7
+ 
++      - description: Exynos7570 based boards
++        items:
++          - enum:
++              - samsung,on5xelte                # Samsung Galaxy J5 Prime (SM-G570F)
++          - const: samsung,exynos7570
++
+       - description: Exynos7870 based boards
+         items:
+           - enum:
+diff --git a/Documentation/devicetree/bindings/timer/samsung,exynos4210-mct.yaml b/Documentation/devicetree/bindings/timer/samsung,exynos4210-mct.yaml
+--- a/Documentation/devicetree/bindings/timer/samsung,exynos4210-mct.yaml
++++ b/Documentation/devicetree/bindings/timer/samsung,exynos4210-mct.yaml
+@@ -34,6 +34,7 @@
+               - samsung,exynos5260-mct
+               - samsung,exynos5420-mct
+               - samsung,exynos5433-mct
++              - samsung,exynos7570-mct
+               - samsung,exynos850-mct
+               - samsung,exynos8895-mct
+               - samsung,exynos990-mct
+@@ -138,6 +139,7 @@
+               - samsung,exynos5260-mct
+               - samsung,exynos5420-mct
+               - samsung,exynos5433-mct
++              - samsung,exynos7570-mct
+               - samsung,exynos850-mct
+               - samsung,exynos8895-mct
+               - samsung,exynos990-mct
+diff --git a/arch/arm64/boot/dts/exynos/Makefile b/arch/arm64/boot/dts/exynos/Makefile
+--- a/arch/arm64/boot/dts/exynos/Makefile
++++ b/arch/arm64/boot/dts/exynos/Makefile
+@@ -7,6 +7,7 @@
+ 	exynos5433-tm2.dtb		\
+ 	exynos5433-tm2e.dtb		\
+ 	exynos7-espresso.dtb		\
++	exynos7570-on5xelte-stage0.dtb	\
+ 	exynos7870-a2corelte.dtb	\
+ 	exynos7870-j5y17lte.dtb		\
+ 	exynos7870-j6lte.dtb		\
