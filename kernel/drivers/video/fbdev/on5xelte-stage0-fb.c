@@ -121,7 +121,7 @@ static int __init decode_surface(const struct stage0_registers *registers,
 	};
 	return 0;
 }
-static bool __init fdt_string(const void *fdt, int node, const char *property,
+static bool __init stage0_fdt_string(const void *fdt, int node, const char *property,
 			      const char *expected)
 {
 	int bytes;
@@ -292,7 +292,7 @@ static int __init validate_fdt(const struct stage0_surface *surface,
 		if (fdt_node_check_compatible(fdt, node, "simple-framebuffer"))
 			continue;
 		if (++frames != 1 || node != fdt_path_offset(fdt, "/chosen/framebuffer@67000000") ||
-		    !fdt_string(fdt, node, "status", "disabled"))
+		    !stage0_fdt_string(fdt, node, "status", "disabled"))
 			return -EINVAL;
 		fdt_getprop(fdt, node, "memory-region", &length);
 		if (length != -FDT_ERR_NOTFOUND)

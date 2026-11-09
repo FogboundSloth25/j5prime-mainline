@@ -100,6 +100,20 @@ class EncryptionTests(unittest.TestCase):
         self.assertNotEqual(result.returncode,0)
         self.assertIn("CI-only",result.stderr)
 
+    def test_failure_sources_precede_tests_and_compilation(self):
+        workflow = (ROOT/".github/workflows/mainline.yml").read_text()
+        snapshot = 'git archive --format=tar.gz "$GITHUB_SHA" > out/source/ci-port-source.tar.gz'
+        self.assertLess(workflow.index("Verify exact authorized source commit"), workflow.index(snapshot))
+        self.assertLess(workflow.index(snapshot), workflow.index("Install host and AArch64 build tools"))
+        self.assertLess(workflow.index(snapshot), workflow.index("Run synthetic host tests in CI"))
+        self.assertIn("cp -- sources.lock.json LICENSE out/source/", workflow)
+        build = (ROOT/"scripts/build.sh").read_text()
+        upstream = 'cp -- "$WORK/linux-$VERSION.tar.xz" "$SOURCE_DIST/"'
+        self.assertEqual(build.count(upstream), 1)
+        self.assertLess(build.index("run_logged fetch "), build.index(upstream))
+        self.assertLess(build.index(upstream), build.index("run_logged init "))
+        self.assertLess(build.index(upstream), build.index("run_logged kernel "))
+
     def test_branch_workflow_has_only_the_encrypted_artifact_upload(self):
         workflow = (ROOT/".github/workflows/mainline.yml").read_text()
         self.assertEqual(workflow.count("uses: actions/upload-artifact@"),1)

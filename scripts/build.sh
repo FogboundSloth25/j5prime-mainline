@@ -34,6 +34,8 @@ VERSION=$(python3 -c 'import json; print(json.load(open("sources.lock.json"))["l
 LINUX=$WORK/linux-$VERSION
 
 run_logged fetch python3 -m scripts.fetch_kernel --work-root "$WORK"
+# Retain the hash-verified upstream input even if patching or compilation fails.
+cp -- "$WORK/linux-$VERSION.tar.xz" "$SOURCE_DIST/"
 while IFS= read -r patch; do
     [[ -z $patch || $patch == \#* ]] && continue
     [[ $patch =~ ^[0-9]{4}-[a-z0-9-]+\.patch$ ]] || exit 1
@@ -162,7 +164,6 @@ PYINFO
 
 # Complete corresponding kernel + port sources are retained INSIDE the encrypted
 # output bundle. The public repository/source lock independently expose the code.
-cp -- "$WORK/linux-$VERSION.tar.xz" "$SOURCE_DIST/"
 git archive --format=tar.gz HEAD > "$SOURCE_DIST/port-source.tar.gz"
 cp -- "$DIST/kernel.config" "$DIST/build-info.json" sources.lock.json LICENSE "$SOURCE_DIST/"
 cp -- "$LINUX/LICENSES/preferred/MIT" "$DIST/nolibc-MIT-license.txt"

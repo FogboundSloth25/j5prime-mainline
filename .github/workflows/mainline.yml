@@ -37,6 +37,13 @@ jobs:
           [[ $(git rev-parse HEAD) == "$EXPECTED_COMMIT" ]]
           echo 'Immutable CI source checked; no phone action is authorized.'
 
+      - name: Retain immutable port source before tests or build
+        run: |
+          set -euo pipefail
+          mkdir -p out/source
+          git archive --format=tar.gz "$GITHUB_SHA" > out/source/ci-port-source.tar.gz
+          cp -- sources.lock.json LICENSE out/source/
+
       - name: Install host and AArch64 build tools
         run: |
           sudo apt-get update
