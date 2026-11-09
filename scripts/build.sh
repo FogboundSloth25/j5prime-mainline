@@ -42,6 +42,9 @@ while IFS= read -r patch; do
 done < patches/linux/series
 install -m 644 kernel/drivers/clk/samsung/clk-exynos7570-stage0.c \
     "$LINUX/drivers/clk/samsung/"
+install -m 644 kernel/drivers/video/fbdev/on5xelte-stage0-fb.c \
+    "$LINUX/drivers/video/fbdev/"
+install -m 644 kernel/include/linux/on5xelte-stage0-fb.h "$LINUX/include/linux/"
 install -m 644 dts/exynos7570.dtsi dts/exynos7570-on5xelte-stage0.dts \
     "$LINUX/arch/arm64/boot/dts/exynos/"
 

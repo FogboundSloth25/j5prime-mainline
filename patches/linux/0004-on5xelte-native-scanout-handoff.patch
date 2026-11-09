@@ -1,0 +1,75 @@
+Subject: [LOCAL, EXPERIMENTAL] video: check native SM-G570F inherited scanout
+
+The separately supplied kernel/ driver performs read-only DECON measurements,
+full-backing and page-envelope checks before allocator startup, and late drift
+checks before platform publication. Do not enable a static DT framebuffer or
+ignore a failed memory-resource reservation in this diagnostic configuration.
+This is not a panel driver or evidence of S-Boot loading/boot compatibility.
+
+diff --git a/arch/arm64/kernel/setup.c b/arch/arm64/kernel/setup.c
+--- a/arch/arm64/kernel/setup.c
++++ b/arch/arm64/kernel/setup.c
+@@ -27,6 +27,7 @@
+ #include <linux/proc_fs.h>
+ #include <linux/memblock.h>
+ #include <linux/of_fdt.h>
++#include <linux/on5xelte-stage0-fb.h>
+ #include <linux/efi.h>
+ #include <linux/psci.h>
+ #include <linux/sched/task.h>
+@@ -330,6 +331,7 @@
+ 	}
+ 
+ 	arm64_memblock_init();
++	on5xelte_stage0_fb_prepare(__fdt_pointer);
+ 
+ 	paging_init();
+ 
+diff --git a/drivers/video/fbdev/Kconfig b/drivers/video/fbdev/Kconfig
+--- a/drivers/video/fbdev/Kconfig
++++ b/drivers/video/fbdev/Kconfig
+@@ -1803,3 +1803,12 @@
+ source "drivers/video/fbdev/mmp/Kconfig"
+ 
+ source "drivers/video/fbdev/core/Kconfig"
++
++config FB_ON5XELTE_STAGE0
++	bool "Experimental SM-G570F inherited scanout diagnostic"
++	depends on ARM64 && ARCH_EXYNOS && OF && FB_SIMPLE=y
++	help
++	  Read/check the S-Boot DECON scanout and its complete backing before
++	  publishing platform data to simplefb. No display/clock/power registers
++	  are written. This local stage0 is not a complete display driver and
++	  must not be enabled for other boards or used for unattended operation.
+diff --git a/drivers/video/fbdev/Makefile b/drivers/video/fbdev/Makefile
+--- a/drivers/video/fbdev/Makefile
++++ b/drivers/video/fbdev/Makefile
+@@ -124,3 +124,5 @@
+ 
+ # the test framebuffer is last
+ obj-$(CONFIG_FB_VIRTUAL)          += vfb.o
++
++obj-$(CONFIG_FB_ON5XELTE_STAGE0) += on5xelte-stage0-fb.o
+diff --git a/drivers/video/fbdev/simplefb.c b/drivers/video/fbdev/simplefb.c
+--- a/drivers/video/fbdev/simplefb.c
++++ b/drivers/video/fbdev/simplefb.c
+@@ -537,6 +537,10 @@
+ 	struct simplefb_par *par;
+ 	struct resource *res, *mem;
+ 
++	/* Native stage0 must not accept a firmware-enabled static DT surface. */
++	if (IS_ENABLED(CONFIG_FB_ON5XELTE_STAGE0) && pdev->dev.of_node)
++		return -ENODEV;
++
+ 	if (fb_get_options("simplefb", NULL))
+ 		return -ENODEV;
+ 
+@@ -561,6 +565,8 @@
+ 
+ 	mem = request_mem_region(res->start, resource_size(res), "simplefb");
+ 	if (!mem) {
++		if (IS_ENABLED(CONFIG_FB_ON5XELTE_STAGE0))
++			return -EBUSY; /* Never fall back after a resource collision. */
+ 		/*
+ 		 * We cannot make this fatal. Sometimes this comes from magic
+ 		 * spaces our resource handlers simply don't know about. Use
