@@ -17,12 +17,12 @@
 		#address-cells = <2>;
 		#size-cells = <2>;
 		stdout-path = "display0";
-		bootargs = "console=tty0 consoleblank=0 loglevel=8 ignore_loglevel initcall_debug clk_ignore_unused nokaslr maxcpus=1 panic=0 rdinit=/init";
+		bootargs = "console=tty0 consoleblank=0 loglevel=8 ignore_loglevel initcall_debug clk_ignore_unused nokaslr maxcpus=1 mem=512M panic=0 rdinit=/init";
 
 		/*
-		 * Placeholder only. uniLoader must validate the live surface,
-		 * replace every mode property, reserve the scanout backing and
-		 * update this node's address/alias BEFORE enabling it.
+		 * Permanently disabled placeholder, not an inherited surface.
+		 * Native stage0 checks live DECON and full backing before publishing
+		 * separate simplefb platform data. Never enable this static DT node.
 		 */
 		framebuffer0: framebuffer@67000000 {
 			compatible = "simple-framebuffer";
@@ -52,7 +52,8 @@
 			no-map;
 		};
 
-		/* Retain mapping: the embedded DTB may reside in this region. */
+		/* Preserve the firmware FDT request area; retain its mapping.
+		 * Also covers the historical loader area, which is not used here. */
 		loader@47000000 {
 			reg = <0 0x47000000 0 0x02000000>;
 		};

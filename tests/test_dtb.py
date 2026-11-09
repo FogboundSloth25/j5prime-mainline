@@ -80,6 +80,17 @@ class DtbTests(unittest.TestCase):
         self.assertFalse(report["hardware_boot_tested"])
         self.assertFalse(report["framebuffer_enabled"])
 
+    def test_forced_native_memory_argument_and_disabled_placeholder(self):
+        self.put("/chosen", "bootargs", [
+            "console=tty0 consoleblank=0 loglevel=8 ignore_loglevel initcall_debug "
+            "clk_ignore_unused nokaslr maxcpus=1 panic=0 rdinit=/init"], "s")
+        with self.assertRaisesRegex(ValueError, "bootargs"):
+            validate_dtb(self.dtb)
+        self.restore()
+        self.put("/chosen/framebuffer@67000000", "status", ["okay"], "s")
+        with self.assertRaisesRegex(ValueError, "status"):
+            validate_dtb(self.dtb)
+
     def test_legal_phandle_renumbering_is_not_a_topology_change(self):
         for node, handle in ((OSC, 0x101), (MIF, 0x202), (PERI, 0x303)):
             self.put(node, "phandle", [handle])

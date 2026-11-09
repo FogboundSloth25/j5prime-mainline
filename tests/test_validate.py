@@ -189,7 +189,7 @@ class ConfigTests(unittest.TestCase):
     def test_strict_fragment_and_core_selection(self):
         report = validate_config(self.actual, self.fragment, POWER_SUPPLY_KCONFIG)
         self.assertGreater(report["requested_options_checked"], 50)
-        self.assertEqual(report["core_platform_checks"], 7)
+        self.assertEqual(report["core_platform_checks"], 8)
         self.assertTrue(report["stage0_clock_provider_built_in"])
         self.assertFalse(report["firmware_mif_clock_path_managed"])
         self.assertEqual(report["power_supply_options_checked"], 5)

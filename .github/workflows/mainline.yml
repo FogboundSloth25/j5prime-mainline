@@ -1,74 +1,79 @@
 name: Mainline stage0
+run-name: Native stage0 ${{ inputs.expected_commit }}
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+    inputs:
+      expected_commit:
+        description: Exact 40-character native-branch commit; compilation only, not phone authorization
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: mainline-stage0-${{ github.ref }}
-  cancel-in-progress: true
+  group: native-stage0-${{ github.ref }}-${{ inputs.expected_commit }}
+  cancel-in-progress: false
 
 jobs:
   build:
-    name: SM-G570F upstream diagnostic components
+    name: SM-G570F native BOOT candidate and synthetic checks
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
-      - name: Checkout port sources
+      - name: Checkout immutable dispatch source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      - name: Verify exact authorized source commit
+        env:
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+        run: |
+          set -euo pipefail
+          [[ $EXPECTED_COMMIT =~ ^[0-9a-f]{40}$ ]]
+          [[ $EXPECTED_COMMIT == "$GITHUB_SHA" ]]
+          [[ $(git rev-parse HEAD) == "$EXPECTED_COMMIT" ]]
+          echo 'Immutable CI source checked; no phone action is authorized.'
 
       - name: Install host and AArch64 build tools
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
             bc bison flex build-essential clang gcc-aarch64-linux-gnu \
-            libc6-dev-arm64-cross libssl-dev libelf-dev \
+            libc6-dev-arm64-cross libssl-dev libelf-dev libfdt-dev openssl \
             device-tree-compiler xz-utils python3-venv python3-dev swig cpio
 
-      - name: Run host-only tests
-        run: python3 -m unittest discover -s tests -v
+      - name: Run synthetic host tests in CI
+        run: |
+          set -euo pipefail
+          mkdir -p out/logs
+          python3 -m unittest discover -s tests -v 2>&1 | tee out/logs/host-tests.log
 
-      - name: Check clock stand-ins with Clang sanitizers too
-        run: HOSTCC=clang python3 -m unittest tests.test_clock -v
+      - name: Check production clock and framebuffer stand-ins with Clang too
+        run: |
+          set -euo pipefail
+          HOSTCC=clang python3 -m unittest tests.test_clock tests.test_framebuffer -v \
+            2>&1 | tee out/logs/clang-standins.log
 
-      - name: Build and validate pinned upstream kernel
+      - name: Build pinned upstream kernel and validate native candidate
         run: bash scripts/build.sh
 
-      - name: Upload corresponding upstream and port sources
-        if: success()
+      - name: Encrypt outputs and diagnostics, including failed-build evidence
+        id: encrypt
+        if: always()
+        env:
+          STAGE0_BUILD_RECIPIENT_CERT: ${{ vars.STAGE0_BUILD_RECIPIENT_CERT }}
+          BUILD_JOB_STATUS: ${{ job.status }}
+        run: python3 -m scripts.encrypt_artifacts
+
+      - name: Upload recipient-encrypted bundle only
+        if: always() && steps.encrypt.outcome == 'success'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: on5xelte-stage0-source-${{ github.run_id }}
-          path: out/source/
+          name: on5xelte-native-stage0-encrypted-${{ github.run_id }}-${{ github.run_attempt }}
+          path: out/encrypted/
           compression-level: 0
           if-no-files-found: error
-          retention-days: 14
-
-      - name: Upload checked build components (not a flash image)
-        if: success()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: on5xelte-stage0-${{ github.run_id }}
-          path: dist/
-          if-no-files-found: error
-          retention-days: 14
-
-      - name: Upload diagnostic logs even on failure
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: stage0-logs-${{ github.run_id }}
-          path: |
-            out/logs/
-            out/reports/
-            dist/kernel.config
-          if-no-files-found: warn
           retention-days: 14

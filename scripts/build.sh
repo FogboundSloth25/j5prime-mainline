@@ -16,7 +16,7 @@ LOGS=$REPO/out/logs
 REPORTS=$REPO/out/reports
 DIST=$REPO/dist
 SOURCE_DIST=$REPO/out/source
-mkdir -p -- "$LOGS" "$REPORTS" "$DIST" "$SOURCE_DIST"
+mkdir -p -- "$LOGS" "$REPORTS" "$DIST" "$SOURCE_DIST" "$KERNEL_OUT"
 
 run_logged() {
     local name=$1
@@ -57,8 +57,11 @@ run_logged init aarch64-linux-gnu-gcc -std=gnu11 -Wall -Wextra -Werror \
     -o "$DIST/init" -lgcc
 python3 -m scripts.validate elf "$DIST/init" > "$REPORTS/init-elf.json"
 python3 -m scripts.make_initramfs --init "$DIST/init" --output "$DIST/initramfs.cpio.gz"
-python3 -m scripts.validate initramfs "$DIST/initramfs.cpio.gz" > "$REPORTS/initramfs.json"
+python3 -m scripts.validate initramfs "$DIST/initramfs.cpio.gz" --built-in > "$REPORTS/initramfs.json"
 
+# A single .cpio.gz source is copied by pinned usr/Makefile, not recompressed.
+# The relative Kconfig path is resolved in the O= kernel output directory.
+install -m 644 "$DIST/initramfs.cpio.gz" "$KERNEL_OUT/on5xelte-stage0-initramfs.cpio.gz"
 run_logged allnoconfig make -C "$LINUX" O="$KERNEL_OUT" allnoconfig
 run_logged merge-config bash "$LINUX/scripts/kconfig/merge_config.sh" -m -O "$KERNEL_OUT" \
     "$KERNEL_OUT/.config" "$REPO/configs/on5xelte-stage0.config"
@@ -101,41 +104,64 @@ fi
 run_logged kernel make -C "$LINUX" O="$KERNEL_OUT" -j"$(nproc)" Image
 install -m 644 "$KERNEL_OUT/arch/arm64/boot/Image" "$DIST/Image"
 install -m 644 "$KERNEL_OUT/vmlinux" "$KERNEL_OUT/System.map" "$DIST/"
-python3 -m scripts.validate image "$DIST/Image" > "$REPORTS/image.json"
+python3 -m scripts.validate image "$DIST/Image" --load-address 0x40000000 > "$REPORTS/image.json"
+python3 -m scripts.validate_builtin --image "$DIST/Image" --vmlinux "$DIST/vmlinux" \
+    --initramfs "$DIST/initramfs.cpio.gz" --init "$DIST/init" > "$REPORTS/built-in-initramfs.json"
+python3 -m scripts.native_boot pack --image "$DIST/Image" \
+    --dtb "$DIST/exynos7570-on5xelte-stage0.dtb" \
+    --output "$DIST/on5xelte-native-stage0-boot-rev04.img" > "$REPORTS/native-boot.json"
+python3 -m scripts.native_boot verify \
+    --output "$DIST/on5xelte-native-stage0-boot-rev04.img" > "$REPORTS/native-boot-reinspection.json"
 
 cp -- sources.lock.json LICENSE "$DIST/"
 cp -- "$REPORTS/"*.json "$DIST/"
-cat > "$DIST/NOT-FLASHABLE.txt" <<'NOTICE'
-Experimental upstream Linux stage0 BUILD COMPONENTS, not an Android BOOT image.
-Mainline has NOT been boot-tested on this phone. The simplefb DT node is disabled.
-Runtime uniLoader framebuffer handoff and full bundle checks are still required.
+cat > "$DIST/NO-PHONE-WRITE-AUTHORIZATION.txt" <<'NOTICE'
+Experimental upstream Linux native BOOT candidate for SM-G570F SWA rev04 only.
+The kernel includes a checked built-in diagnostic /init and a read-only DECON
+full-backing/reservation gate; the static DT simplefb placeholder stays disabled.
+The generated legacy header requests Image at 0x40000000, NOT old 0x40080000.
+S-Boot acceptance, actual Image/FDT placement and Linux boot remain UNVERIFIED.
+The DTBH and footer are format scaffolding, not Samsung signature authentication.
 No storage, USB/ADB, charging or thermal management is provided.
-No phone write is authorized by successful compilation or artifact download.
+Successful CI/download does not authorize transfer, flashing or reboot.
+Never change S-Boot/BL or RECOVERY; retain the original backups and working TWRP.
 NOTICE
-python3 - <<'PY'
+python3 - <<'PYINFO'
 import json
 import os
 from pathlib import Path
 import subprocess
 
+commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+if commit != os.environ['GITHUB_SHA']:
+    raise SystemExit('build source does not match immutable CI commit')
 report = {
     'repository': os.environ['GITHUB_REPOSITORY'],
-    'repository_commit': os.environ['GITHUB_SHA'],
+    'repository_commit': commit,
     'run_id': os.environ['GITHUB_RUN_ID'],
+    'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'],
     'run_url': f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
     'sources': json.loads(Path('sources.lock.json').read_text()),
     'toolchain': subprocess.check_output(['aarch64-linux-gnu-gcc', '--version'], text=True).splitlines()[0],
     'source_date_epoch': int(os.environ['SOURCE_DATE_EPOCH']),
+    'artifact_kind': 'generated diagnostic native BOOT candidate',
+    'native_image_requested_load_address': '0x40000000',
+    'built_in_diagnostic_init_verified': True,
+    'native_framebuffer_handoff_code_built_in': True,
+    'framebuffer_runtime_handoff_applied_on_phone': False,
+    'static_DTB_framebuffer_enabled': False,
+    'generated_rev04_DTBH_legacy_BOOT_wrapper': True,
+    'private_firmware_or_device_backup_used': False,
+    'firmware_acceptance_and_actual_placement_verified': False,
     'hardware_boot_tested': False,
-    'flashable_android_image': False,
-    'framebuffer_runtime_handoff_applied': False,
-    'source_artifact': f"on5xelte-stage0-source-{os.environ['GITHUB_RUN_ID']}",
+    'phone_write_authorized': False,
+    'source_artifact': f"on5xelte-native-stage0-encrypted-{os.environ['GITHUB_RUN_ID']}-{os.environ['GITHUB_RUN_ATTEMPT']}",
 }
 Path('dist/build-info.json').write_text(json.dumps(report, indent=2, sort_keys=True) + '\n')
-PY
+PYINFO
 
-# Make complete corresponding kernel + port sources available from this run,
-# separately, so downloading small build components needn't download Linux.
+# Complete corresponding kernel + port sources are retained INSIDE the encrypted
+# output bundle. The public repository/source lock independently expose the code.
 cp -- "$WORK/linux-$VERSION.tar.xz" "$SOURCE_DIST/"
 git archive --format=tar.gz HEAD > "$SOURCE_DIST/port-source.tar.gz"
 cp -- "$DIST/kernel.config" "$DIST/build-info.json" sources.lock.json LICENSE "$SOURCE_DIST/"
@@ -149,11 +175,13 @@ for directory in "$DIST" "$SOURCE_DIST"; do
 done
 
 cat >> "$GITHUB_STEP_SUMMARY" <<'SUMMARY'
-## Upstream Linux stage0 components built and checked
+## Native upstream Linux stage0 candidate built and checked
 
-- ARM64 Image, static diagnostic initramfs and rev04 board DTB
-- Resolved Kconfig, Image load limits, DT properties and DT schemas checked
-- Complete corresponding source supplied in the separate source artifact
-- **Not boot-tested, not an Android BOOT image, no flashing authorization**
-- Framebuffer placeholder is disabled; runtime uniLoader integration remains
+- Text-offset-zero ARM64 Image requested at 0x40000000; full linked memory checked
+- Actual Image/vmlinux bytes contain the checked built-in diagnostic /init archive
+- Disabled static framebuffer; compiled read-only DECON/full-backing runtime gate
+- Generated one-entry SWA rev04 DTBH v2 and compact legacy BOOT wrapper
+- Resolved Kconfig, DT properties/schemas and synthetic host stand-ins checked
+- Images, logs, reports and corresponding sources exported only recipient-encrypted
+- **S-Boot acceptance/actual placement/Linux boot UNVERIFIED; no phone action authorized**
 SUMMARY

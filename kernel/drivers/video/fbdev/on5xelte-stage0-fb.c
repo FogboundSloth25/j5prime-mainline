@@ -136,12 +136,100 @@ static bool __init two_cells(const void *fdt, int node, const char *property)
 
 	return value && bytes == (int)sizeof(*value) && fdt32_ld(value) == 2;
 }
+static bool __init separate_blocks(u64 a, u64 a_bytes, u64 b, u64 b_bytes)
+{
+	return a + a_bytes <= b || b + b_bytes <= a;
+}
+
+/* Pinned Linux declares fdt_check_full() but does not link its implementation.
+ * Independently check v17 blocks, reserve terminator and token grammar using
+ * the read-only libfdt helpers actually linked. Board checks follow below.
+ */
+static bool __init valid_fdt_layout(const void *fdt)
+{
+	u64 total, structure, structure_bytes, strings, strings_bytes, reserve, end;
+	u64 address, bytes;
+	const struct fdt_property *property;
+	const char *name;
+	bool children[32] = { }, root_closed = false;
+	int offset = 0, next, depth = 0, length, count;
+	u32 tag;
+
+	if (!fdt || fdt_check_header(fdt) || fdt_version(fdt) != 17 ||
+	    fdt_last_comp_version(fdt) != 16 || fdt_totalsize(fdt) > MAX_FDT_BYTES)
+		return false;
+	total = fdt_totalsize(fdt);
+	structure = fdt_off_dt_struct(fdt);
+	structure_bytes = fdt_size_dt_struct(fdt);
+	strings = fdt_off_dt_strings(fdt);
+	strings_bytes = fdt_size_dt_strings(fdt);
+	reserve = fdt_off_mem_rsvmap(fdt);
+	if (structure_bytes < 16 || !strings_bytes ||
+	    !separate_blocks(structure, structure_bytes, strings, strings_bytes))
+		return false;
+	end = reserve;
+	for (count = 0; count <= 64; count++) {
+		if (end + 16 > total || fdt_get_mem_rsv(fdt, count, &address, &bytes))
+			return false;
+		end += 16;
+		if (!address && !bytes)
+			break;
+		if (count == 64 || !valid_span(address, bytes))
+			return false;
+	}
+	if (!separate_blocks(reserve, end - reserve, structure, structure_bytes) ||
+	    !separate_blocks(reserve, end - reserve, strings, strings_bytes))
+		return false;
+	while ((u64)offset < structure_bytes) {
+		tag = fdt_next_tag(fdt, offset, &next);
+		if (next <= offset || (u64)next > structure_bytes)
+			return false;
+		switch (tag) {
+		case FDT_BEGIN_NODE:
+			name = fdt_get_name(fdt, offset, &length);
+			if (root_closed || depth == 32 || !name || length < 0 || length > 255 ||
+			    memchr(name, '/', length) ||
+			    (!depth && (offset || length)) || (depth && !length))
+				return false;
+			if (depth)
+				children[depth - 1] = true;
+			children[depth++] = false;
+			break;
+		case FDT_PROP:
+			if (!depth || children[depth - 1])
+				return false;
+			property = fdt_get_property_by_offset(fdt, offset, &length);
+			if (!property || length < 0)
+				return false;
+			name = fdt_get_string(fdt, fdt32_to_cpu(property->nameoff), &length);
+			if (!name || length <= 0 || length > 255)
+				return false;
+			break;
+		case FDT_END_NODE:
+			if (!depth)
+				return false;
+			if (!--depth)
+				root_closed = true;
+			break;
+		case FDT_NOP:
+			if (!offset)
+				return false;
+			break;
+		case FDT_END:
+			return root_closed && !depth && (u64)next == structure_bytes;
+		default:
+			return false;
+		}
+		offset = next;
+	}
+	return false;
+}
+
 static bool __init valid_machine_fdt(phys_addr_t physical)
 {
 	const void *fdt = initial_boot_params;
 
-	return fdt && !fdt_check_header(fdt) && fdt_totalsize(fdt) <= MAX_FDT_BYTES &&
-		!fdt_check_full(fdt, fdt_totalsize(fdt)) &&
+	return valid_fdt_layout(fdt) &&
 		valid_span(physical, fdt_totalsize(fdt)) && physical >= STAGE0_RAM_BASE &&
 		(u64)physical + fdt_totalsize(fdt) <= STAGE0_RAM_END &&
 		!fdt_node_check_compatible(fdt, 0, "samsung,on5xelte") &&

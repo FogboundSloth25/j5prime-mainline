@@ -6,7 +6,7 @@
 static unsigned int checks, reads, reservations, publications, drift_after;
 static bool map_fail, reserve_fail, publication_fail;
 static u32 mmio[DECON_BYTES / 4];
-static char flat_tree[16384];
+_Alignas(8) static char flat_tree[16384];
 static struct memblock_region memories[8], reserved_regions[32];
 struct memblock memblock;
 void *initial_boot_params;
@@ -214,6 +214,33 @@ static void fdt_and_memory(void)
     reset(); phys_initrd_start=0x42000000; phys_initrd_size=64;
     set_u32("/chosen","linux,initrd-start",0x42000000); set_u32("/chosen","linux,initrd-end",0x42000040); ready();
 }
+static void malformed_fdt_layout(void)
+{
+    u32 offset;
+    int property;
+    fdt32_t *word;
+    reset(); fdt_set_version(flat_tree, 16); blocked(); CHECK(reads == 0);
+    reset(); fdt_set_off_dt_strings(flat_tree, fdt_off_dt_struct(flat_tree));
+    blocked(); CHECK(reads == 0);
+    reset(); fdt_set_off_mem_rsvmap(flat_tree, fdt_off_dt_struct(flat_tree));
+    blocked(); CHECK(reads == 0);
+    reset(); fdt_set_size_dt_struct(flat_tree, fdt_size_dt_struct(flat_tree) - 4);
+    blocked(); CHECK(reads == 0);
+    reset(); offset = fdt_off_dt_struct(flat_tree);
+    word = (fdt32_t *)(flat_tree + offset); *word = cpu_to_fdt32(FDT_END_NODE);
+    blocked(); CHECK(reads == 0);
+    reset(); property = fdt_first_property_offset(flat_tree, 0); assert(property >= 0);
+    offset = fdt_off_dt_struct(flat_tree) + property;
+    word = (fdt32_t *)(flat_tree + offset + 4); *word = cpu_to_fdt32(UINT32_MAX);
+    blocked(); CHECK(reads == 0);
+    reset(); property = fdt_first_property_offset(flat_tree, 0); assert(property >= 0);
+    offset = fdt_off_dt_struct(flat_tree) + property;
+    word = (fdt32_t *)(flat_tree + offset + 8); *word = cpu_to_fdt32(UINT32_MAX);
+    blocked(); CHECK(reads == 0);
+    reset(); offset = fdt_off_mem_rsvmap(flat_tree);
+    memset(flat_tree + offset, 0xff, 16); blocked(); CHECK(reads == 0);
+}
+
 static void failures_and_drift(void)
 {
     reset(); map_fail=true; blocked();
@@ -236,7 +263,7 @@ static void failures_and_drift(void)
 }
 int main(void)
 {
-    modes_and_geometry(); spans_and_full_backing(); fdt_and_memory(); failures_and_drift();
+    modes_and_geometry(); spans_and_full_backing(); fdt_and_memory(); malformed_fdt_layout(); failures_and_drift();
     printf("framebuffer-stage0: %u synthetic checks passed; real libfdt, mocked MMIO/memblock/platform only; no hardware evidence.\n",checks);
     return 0;
 }

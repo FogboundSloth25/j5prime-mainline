@@ -88,25 +88,28 @@ reserves `0x46000000–0x47000000` and `0x52800000–0x52a00000`. The separate
 `0x47000000–0x49000000` reservation protects the current uniLoader relocation
 area and its DTB; its size must be checked when integrating a loader bundle.
 
-The initial planned addresses are inherited from the current loader config,
-not validated kernel boot addresses:
+The isolated native branch no longer depends on uniLoader relocation. Its
+requests are a text-offset-zero `Image` at `0x40000000`, a trailer-only external
+compatibility ramdisk at `0x42000000`, and FDT area at `0x47f00000`. The diagnostic
+`/init` archive is built into Image. The historical loader request `0x50000000`
+and old-smoke actual placement `0x40080000` are separate preserved evidence, not
+proof of these new firmware requests.
 
-```text
-uniLoader relocation: 0x47000000 (reserved 32 MiB)
-external initramfs:   0x42000000 (check size and DT initrd range)
-mainline Image:       0x50000000 (span must end at or before 0x52800000)
-```
+Generated DTBH v2 has exactly one entry `(7570, 20646, 561349850, 4, 4)`, a 2048-byte
+component offset and final entry-size field **32**. These are sanitized non-unique
+board identity/format facts, not copied firmware DTB bytes. No stock or recovery
+image is used as public CI input. Format validity does not prove S-Boot selection,
+acceptance, actual kernel placement or FDT handoff.
 
-The 720×1280 panel remains initialized by S-Boot. The working recovery has
-32-bit pixels, line stride 2880 bytes and virtual size 720×2560. The observed
-S-Boot framebuffer argument is `0x67000000`, but it is **not treated as a
-guaranteed runtime address or format**. uniLoader reads live DECON window-0
-registers and rejects unsupported or unsafe layouts before writing.
+The 720×1280 panel is initially firmware-owned. The observed `0x67000000` address,
+32-bit stride 2880 and doubled backing height are **not guaranteed live state**.
+Native Linux checks stable DECON window-0 metadata, supported format, full backing
+and page envelope, all relevant reservations and late state before handing checked
+platform data to simplefb. Scanout is accepted only within `0x60000000–0x710ef000`;
+first-512-MiB Linux RAM, the entire high firmware zone and second bank are rejected.
 
-The mainline simplefb placeholder stays disabled. A later runtime handoff
-must replace its address, visible size, stride and format, reserve the live
-buffer (including any scanout backing beyond the visible surface), update
-its node/alias, and only then enable it. No DECON/DSIM reset or display-clock
-reconfiguration is part of this stage. The sole managed clock register bit
-is the separately researched MCT PCLK gate; shared CMU_MIF clocks stay
-firmware-owned and read-only.
+The DT framebuffer remains disabled even after handoff; no static framebuffer is
+enabled or patched. No DECON/DSIM reset or display-clock reconfiguration is part
+of inheritance. The separately researched MCT PCLK gate remains the sole managed
+bit in the narrow clock driver; CMU_MIF clocks remain firmware-owned/read-only.
+See [the native contract and unconfirmed hardware limits](bringup.md).

@@ -18,6 +18,11 @@ PAYLOAD_ENTRY = 0x50000000
 RAMDISK_ENTRY = 0x42000000
 TIMA_START = 0x52800000
 MAX_INITRAMFS = 16 * 1024 * 1024
+NATIVE_ENTRY = 0x40000000
+NATIVE_KERNEL_LIMIT = RAMDISK_ENTRY
+NATIVE_INITRAMFS_SOURCE = "on5xelte-stage0-initramfs.cpio.gz"
+NATIVE_BOOTARGS = ("console=tty0 consoleblank=0 loglevel=8 ignore_loglevel initcall_debug "
+                   "clk_ignore_unused nokaslr maxcpus=1 mem=512M panic=0 rdinit=/init")
 
 
 def parse_config(text: str) -> dict:
@@ -65,9 +70,16 @@ def validate_config(actual_text: str, fragment_text: str,
     # These hidden/core symbols must be selected, not merely assumed.
     for key in ("CONFIG_ARM_GIC", "CONFIG_ARM_PSCI_FW", "CONFIG_ARM_ARCH_TIMER",
                 "CONFIG_CLKSRC_EXYNOS_MCT", "CONFIG_COMMON_CLK",
-                "CONFIG_COMMON_CLK_SAMSUNG", "CONFIG_EXYNOS_7570_STAGE0_CLK"):
+                "CONFIG_COMMON_CLK_SAMSUNG", "CONFIG_EXYNOS_7570_STAGE0_CLK",
+                 "CONFIG_FB_ON5XELTE_STAGE0"):
         if actual.get(key) != "y":
             errors.append(f"{key}: required built-in platform support is missing")
+    for key, wanted in {
+            "CONFIG_INITRAMFS_SOURCE": json.dumps(NATIVE_INITRAMFS_SOURCE),
+            "CONFIG_CMDLINE": json.dumps(NATIVE_BOOTARGS),
+            "CONFIG_CMDLINE_FORCE": "y"}.items():
+        if actual.get(key) != wanted:
+            errors.append(f"{key}: native built-in/forced-command-line contract is missing")
     # POWER_SUPPLY itself is mandatory on ARM64, but stage0 must not enable
     # any of its optional drivers, test devices, debug or hwmon helpers.
     for key in supply_options:
@@ -75,14 +87,21 @@ def validate_config(actual_text: str, fragment_text: str,
             errors.append(f"{key}: optional power-supply support must be disabled in stage0")
     if errors:
         raise ValueError("Kconfig checks failed:\n" + "\n".join(errors))
-    return {"requested_options_checked": len(requested), "core_platform_checks": 7,
+    return {"requested_options_checked": len(requested), "core_platform_checks": 8,
             "power_supply_options_checked": len(supply_options),
             "power_supply_optional_support_enabled": False,
             "stage0_clock_provider_built_in": True,
+             "native_framebuffer_handoff_built_in": True,
+             "native_initramfs_source": NATIVE_INITRAMFS_SOURCE,
             "firmware_mif_clock_path_managed": False}
 
 
-def validate_image(image: bytes) -> dict:
+def validate_image(image: bytes, *, load_address: int = PAYLOAD_ENTRY) -> dict:
+    # Explicit legacy component validation remains available for saved history.
+    # Native callers must request the separate aligned 0x40000000 contract.
+    if type(load_address) is not int or load_address not in (PAYLOAD_ENTRY, NATIVE_ENTRY):
+        raise ValueError("unsupported planned Image load address")
+    native = load_address == NATIVE_ENTRY
     if len(image) < 64:
         raise ValueError("truncated ARM64 Image header")
     code0, code1 = struct.unpack_from("<II", image)
@@ -93,6 +112,8 @@ def validate_image(image: bytes) -> dict:
         raise ValueError("not an ARM64 Linux Image")
     if flags & 1 or flags & ~0xF:
         raise ValueError("unsupported Image endianness or reserved flags")
+    if native and flags != 0xA:
+        raise ValueError("native stage0 requires pinned Image flags 0xa")
     if (flags >> 1) & 3 != 1:
         raise ValueError("stage0 requires the configured 4 KiB Image page size")
     # Pinned upstream head.S emits an ordinary NOP then B primary_entry
@@ -107,17 +128,22 @@ def validate_image(image: bytes) -> dict:
     target = 4 + imm26 * 4
     if not 64 <= target < len(image):
         raise ValueError("Image entry branch is outside its payload")
-    if text_offset != 0 or (PAYLOAD_ENTRY - text_offset) % (2 * 1024 * 1024):
+    if text_offset != 0 or (load_address - text_offset) % (2 * 1024 * 1024):
         raise ValueError("Image text offset/alignment does not match the planned entry")
     if not image_size or image_size < len(image):
         raise ValueError("missing or undersized Image memory requirement")
-    end = PAYLOAD_ENTRY + image_size
-    if end > TIMA_START:
-        raise ValueError("Image memory span overlaps the firmware TIMA log reservation")
+    end = load_address + image_size
+    limit = NATIVE_KERNEL_LIMIT if native else TIMA_START
+    if end > limit:
+        region = "the native compatibility ramdisk arena" if native else "the firmware TIMA log reservation"
+        raise ValueError("Image memory span overlaps " + region)
     return {"file_bytes": len(image), "required_memory_bytes": image_size,
             "text_offset": text_offset, "flags": flags, "entry_branch_offset": target,
             "entry_instruction_offset": 4,
-            "planned_load_address": PAYLOAD_ENTRY, "planned_memory_end": end,
+            "planned_load_address": load_address, "planned_memory_end": end,
+             "planned_memory_limit": limit,
+             "load_contract": "native-sboot-stage0" if native else "legacy-loader-stage0",
+             "firmware_acceptance_and_actual_placement_verified": False,
             "hardware_boot_tested": False, "flashable_android_image": False,
             "second_header_word": code1}
 
@@ -160,7 +186,7 @@ def validate_init_elf(elf: bytes) -> dict:
             "entry_address": entry}
 
 
-def validate_initramfs(compressed: bytes) -> dict:
+def validate_initramfs(compressed: bytes, *, built_in: bool = False) -> dict:
     if len(compressed) > MAX_INITRAMFS:
         raise ValueError("initramfs exceeds the planned low-memory arena")
     # Bound decompression as well, even though CI supplies our own archive.
@@ -191,10 +217,14 @@ def validate_initramfs(compressed: bytes) -> dict:
     if init["mode"] != stat.S_IFREG | 0o755 or init["rdevmajor"] or init["rdevminor"]:
         raise ValueError("/init is not an executable regular file")
     elf = validate_init_elf(init["data"])
-    return {"compressed_bytes": len(compressed), "archive_bytes": len(raw),
-            "entries": sorted(entries), "init": elf,
-            "planned_load_address": RAMDISK_ENTRY,
-            "planned_initrd_end": RAMDISK_ENTRY + len(compressed)}
+    report = {"compressed_bytes": len(compressed), "archive_bytes": len(raw),
+              "entries": sorted(entries), "init": elf,
+              "userspace_delivery": "built-in Image" if built_in else "legacy external initramfs",
+              "linked_into_Image_verified_by_this_archive_check": False}
+    if not built_in:
+        report.update(planned_load_address=RAMDISK_ENTRY,
+                      planned_initrd_end=RAMDISK_ENTRY + len(compressed))
+    return report
 
 
 def _fdt(path: Path, node: str, prop: str, kind: str = "x") -> list:
@@ -252,6 +282,11 @@ def validate_dtb(path: Path) -> dict:
             [0, 0x47000000, 0, 0x02000000],
         ("/reserved-memory/tima-log@52800000", "reg", "x"):
             [0, TIMA_START, 0, 0x00200000],
+        ("/chosen", "bootargs", "s"): NATIVE_BOOTARGS.split(),
+        ("/chosen", "stdout-path", "s"): ["display0"],
+        ("/chosen/framebuffer@67000000", "compatible", "s"): ["simple-framebuffer"],
+        ("/chosen/framebuffer@67000000", "reg", "x"): [0, 0x67000000, 0, 0x384000],
+        ("/chosen/framebuffer@67000000", "format", "s"): ["a8r8g8b8"],
         ("/chosen/framebuffer@67000000", "status", "s"): ["disabled"],
         ("/chosen/framebuffer@67000000", "width", "x"): [720],
         ("/chosen/framebuffer@67000000", "height", "x"): [1280],
@@ -289,7 +324,7 @@ def validate_dtb(path: Path) -> dict:
         if _fdt(path, f"/cpus/cpu@{index}", "reg") != [0, index]:
             raise ValueError("DTB CPU affinity does not match Exynos7570")
     bootargs = " ".join(_fdt(path, "/chosen", "bootargs", "s"))
-    for required in ("maxcpus=1", "console=tty0", "rdinit=/init", "consoleblank=0"):
+    for required in ("maxcpus=1", "mem=512M", "console=tty0", "rdinit=/init", "consoleblank=0"):
         if required not in bootargs.split():
             raise ValueError(f"DTB missing stage0 argument {required}")
     for forbidden in ("androidboot", "earlycon", "ess_setup", "tima_log"):
@@ -299,7 +334,8 @@ def validate_dtb(path: Path) -> dict:
             "clock_relationship_checks": len(relationships),
             "mct_tick_uses_oscillator": True, "mct_pclk_uses_managed_gate": True,
             "firmware_mif_clock_path_managed": False,
-            "framebuffer_enabled": False, "usable_dram_bytes": 512 * 1024 * 1024,
+            "framebuffer_enabled": False, "native_runtime_handoff_required": True,
+             "forced_memory_limit": "mem=512M", "usable_dram_bytes": 512 * 1024 * 1024,
             "hardware_boot_tested": False}
 
 
@@ -310,7 +346,13 @@ def main() -> None:
     parser.add_argument("fragment", type=Path, nargs="?")
     parser.add_argument("--power-supply-kconfig", type=Path,
                         help="pinned upstream drivers/power/supply/Kconfig (required for config)")
+    parser.add_argument("--load-address", type=lambda value: int(value, 0), default=PAYLOAD_ENTRY,
+                        help="explicit Image contract address; native stage0 uses 0x40000000")
+    parser.add_argument("--built-in", action="store_true",
+                        help="validate an archive for built-in, not external, delivery")
     args = parser.parse_args()
+    if args.built_in and args.kind != "initramfs":
+        parser.error("--built-in applies only to initramfs validation")
     try:
         if args.kind == "config":
             if args.fragment is None:
@@ -321,10 +363,12 @@ def main() -> None:
                                      args.power_supply_kconfig.read_text())
         elif args.kind == "dtb":
             report = validate_dtb(args.path)
+        elif args.kind == "image":
+            report = validate_image(args.path.read_bytes(), load_address=args.load_address)
+        elif args.kind == "initramfs":
+            report = validate_initramfs(args.path.read_bytes(), built_in=args.built_in)
         else:
-            validator = {"image": validate_image, "elf": validate_init_elf,
-                         "initramfs": validate_initramfs}[args.kind]
-            report = validator(args.path.read_bytes())
+            report = validate_init_elf(args.path.read_bytes())
     except (ValueError, OSError, EOFError, subprocess.CalledProcessError) as error:
         parser.exit(1, f"Validation failed: {error}\n")
     print(json.dumps(report, indent=2, sort_keys=True))
