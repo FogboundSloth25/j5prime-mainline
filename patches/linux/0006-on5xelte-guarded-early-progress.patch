@@ -1,0 +1,64 @@
+Subject: [LOCAL, EXPERIMENTAL] video: mark guarded progress before timer init
+
+Leave the original early full-backing reservation and late simplefb
+publication gates intact. The separate renderer only writes one 16x16
+visible framebuffer-memory cell after fresh live/FDT checks; no display
+registers are programmed. Checkpoints indicate visited code, not working
+interrupts, timers, console, panel or firmware loading/entry acceptance.
+
+diff --git a/arch/arm64/kernel/setup.c b/arch/arm64/kernel/setup.c
+--- a/arch/arm64/kernel/setup.c
++++ b/arch/arm64/kernel/setup.c
+@@ -334,6 +334,7 @@
+ 	on5xelte_stage0_fb_prepare(__fdt_pointer);
+ 
+ 	paging_init();
++	on5xelte_stage0_fb_checkpoint(ON5XELTE_STAGE0_PAGING_OK);
+ 
+ 	acpi_table_upgrade();
+ 
+diff --git a/init/main.c b/init/main.c
+--- a/init/main.c
++++ b/init/main.c
+@@ -27,6 +27,7 @@
+ #include <linux/ioport.h>
+ #include <linux/init.h>
+ #include <linux/initrd.h>
++#include <linux/on5xelte-stage0-fb.h>
+ #include <linux/memblock.h>
+ #include <linux/acpi.h>
+ #include <linux/bootconfig.h>
+@@ -1091,6 +1092,7 @@
+ 	context_tracking_init();
+ 	/* init some links before init_ISA_irqs() */
+ 	early_irq_init();
++	on5xelte_stage0_fb_checkpoint(ON5XELTE_STAGE0_IRQ_BEGIN);
+ 	init_IRQ();
+ 	tick_init();
+ 	rcu_init_nohz();
+@@ -1100,7 +1102,9 @@
+ 	softirq_init();
+ 	vdso_setup_data_pages();
+ 	timekeeping_init();
++	on5xelte_stage0_fb_checkpoint(ON5XELTE_STAGE0_TIMER_BEGIN);
+ 	time_init();
++	on5xelte_stage0_fb_checkpoint(ON5XELTE_STAGE0_TIMER_RETURN);
+ 
+ 	/* This must be after timekeeping is initialized */
+ 	random_init();
+@@ -1125,6 +1129,7 @@
+ 	 * this. But we do want output early, in case something goes wrong.
+ 	 */
+ 	console_init();
++	on5xelte_stage0_fb_checkpoint(ON5XELTE_STAGE0_CONSOLE_RETURN);
+ 	if (panic_later)
+ 		panic("Too many boot %s vars at `%s'", panic_later,
+ 		      panic_param);
+diff --git a/drivers/video/fbdev/Makefile b/drivers/video/fbdev/Makefile
+--- a/drivers/video/fbdev/Makefile
++++ b/drivers/video/fbdev/Makefile
+@@ -126,3 +126,4 @@
+ obj-$(CONFIG_FB_VIRTUAL)          += vfb.o
+ 
+ obj-$(CONFIG_FB_ON5XELTE_STAGE0) += on5xelte-stage0-fb.o
++obj-$(CONFIG_FB_ON5XELTE_STAGE0) += on5xelte-stage0-progress.o

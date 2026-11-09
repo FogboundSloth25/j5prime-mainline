@@ -1,0 +1,47 @@
+Subject: [LOCAL, EXPERIMENTAL] clocksource: stop MCT after clock enable failure
+
+Written against the pinned upstream v7.3.3. The narrow stage0 clock
+provider can reject an unstable/disabled parent or a gate write. Enforce
+that error at its MCT consumer before interrupts/counter/events are used.
+Keep success policy unchanged; release failed acquisitions/mapping only.
+A guarded progress cell records the failed code path if scanout is safe.
+This is not evidence that this failure occurred on a physical phone.
+
+diff --git a/drivers/clocksource/exynos_mct.c b/drivers/clocksource/exynos_mct.c
+--- a/drivers/clocksource/exynos_mct.c
++++ b/drivers/clocksource/exynos_mct.c
+@@ -20,6 +20,7 @@
+ #include <linux/of_address.h>
+ #include <linux/clocksource.h>
+ #include <linux/sched_clock.h>
++#include <linux/on5xelte-stage0-fb.h>
+ 
+ #define EXYNOS4_MCTREG(x)		(x)
+ #define EXYNOS4_MCT_G_CNT_L		EXYNOS4_MCTREG(0x100)
+@@ -509,6 +510,7 @@
+ static int __init exynos4_timer_resources(struct device_node *np)
+ {
+ 	struct clk *mct_clk, *tick_clk;
++	int ret;
+ 
+ 	reg_base = of_iomap(np, 0);
+ 	if (!reg_base)
+@@ -522,7 +524,17 @@
+ 	mct_clk = of_clk_get_by_name(np, "mct");
+ 	if (IS_ERR(mct_clk))
+ 		panic("%s: unable to retrieve mct clock instance\n", __func__);
+-	clk_prepare_enable(mct_clk);
++	ret = clk_prepare_enable(mct_clk);
++	if (ret) {
++		pr_err("exynos-mct: unable to enable mct clock (%d); no timer initialization\n", ret);
++		on5xelte_stage0_fb_checkpoint(ON5XELTE_STAGE0_MCT_CLOCK_FAILED);
++		/* prepare_enable already unwinds failure: do not disable another user's gate. */
++		clk_put(mct_clk);
++		clk_put(tick_clk);
++		iounmap(reg_base);
++		reg_base = NULL;
++		return ret;
++	}
+ 
+ 	return 0;
+ }

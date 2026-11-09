@@ -2,10 +2,17 @@
 #include <assert.h>
 #include "framebuffer-kernel-mock.h"
 #include "../../kernel/drivers/video/fbdev/on5xelte-stage0-fb.c"
+#include "../../kernel/drivers/video/fbdev/on5xelte-stage0-progress.c"
 
 static unsigned int checks, reads, reservations, publications, drift_after;
 static bool map_fail, reserve_fail, publication_fail;
 static u32 mmio[DECON_BYTES / 4];
+#define PROGRESS_GUARD 16U
+static u8 progress_storage[PROGRESS_CELL * WIDTH * 4 + 2 * PROGRESS_GUARD];
+#define progress_pixels (progress_storage + PROGRESS_GUARD)
+static unsigned int progress_maps, progress_unmaps, progress_writes, progress_barriers;
+static u64 progress_map_bytes, progress_column;
+static bool progress_map_fail;
 _Alignas(8) static char flat_tree[16384];
 static struct memblock_region memories[8], reserved_regions[32];
 struct memblock memblock;
@@ -37,10 +44,46 @@ u32 readl(const void *address)
 }
 void *early_ioremap(u64 physical, size_t bytes)
 {
-    assert(physical == DECON_BASE && bytes == DECON_BYTES);
-    return map_fail ? NULL : mmio;
+    u32 bpp;
+    if (physical == DECON_BASE) {
+        assert(bytes == DECON_BYTES);
+        return map_fail ? NULL : mmio;
+    }
+    /* Any other physical mapping must be the gate's reserved live surface. */
+    CHECK(prepared && reservations == 1 && physical == saved.address);
+    CHECK(memblock.reserved.regions[memblock.reserved.cnt - 1].base == physical);
+    CHECK(memblock.reserved.regions[memblock.reserved.cnt - 1].size == saved.protected_bytes);
+    bpp = saved.data.stride / WIDTH;
+    CHECK(bytes > (PROGRESS_CELL - 1) * saved.data.stride && bytes <= saved.protected_bytes);
+    progress_column = bytes - (PROGRESS_CELL - 1) * saved.data.stride - PROGRESS_CELL * bpp;
+    CHECK(progress_column % (PROGRESS_CELL * bpp) == 0);
+    CHECK(progress_column / (PROGRESS_CELL * bpp) < 7);
+    progress_map_bytes = bytes;
+    progress_maps++;
+    return progress_map_fail ? NULL : progress_pixels;
 }
-void early_iounmap(void *base, size_t bytes) { assert(base == mmio && bytes == DECON_BYTES); }
+void early_iounmap(void *base, size_t bytes)
+{
+    if (base == mmio) { assert(bytes == DECON_BYTES); return; }
+    CHECK(base == progress_pixels && bytes == progress_map_bytes);
+    progress_unmaps++;
+}
+void memcpy_toio(void *target, const void *source, size_t bytes)
+{
+    uintptr_t pointer = (uintptr_t)target, first = (uintptr_t)progress_pixels;
+    u64 offset;
+    u32 bpp = saved.data.stride / WIDTH;
+    /* Device-register targets and writes outside one visible cell abort. */
+    CHECK(prepared && reservations == 1 && pointer >= first);
+    offset = pointer - first;
+    CHECK((u64)offset + bytes <= progress_map_bytes);
+    CHECK((u64)offset / saved.data.stride < PROGRESS_CELL);
+    CHECK((u64)offset % saved.data.stride == progress_column);
+    CHECK(bytes == PROGRESS_CELL * bpp);
+    memcpy(target, source, bytes);
+    progress_writes++;
+}
+void mock_progress_barrier(void) { progress_barriers++; }
 void *ioremap(u64 physical, size_t bytes) { return early_ioremap(physical, bytes); }
 void iounmap(void *base) { assert(base == mmio); }
 u64 memblock_start_of_DRAM(void)
@@ -120,17 +163,21 @@ static void reset(void)
     memblock = (struct memblock){{1, memories}, {1, reserved_regions}};
     reads = reservations = publications = drift_after = 0;
     map_fail = reserve_fail = publication_fail = false; prepared = false;
+    progress_maps = progress_unmaps = progress_writes = progress_barriers = 0;
+    progress_map_fail = false; progress_map_bytes = progress_column = 0;
+    memset(progress_storage, 0xa5, sizeof(progress_storage));
 }
 static void blocked(void)
 {
     on5xelte_stage0_fb_prepare(0x47f00000);
-    CHECK(!prepared); CHECK(!reservations); CHECK(!publications);
+    CHECK(!prepared); CHECK(!reservations); CHECK(!publications); CHECK(!progress_writes);
     CHECK(!on5xelte_stage0_fb_register()); CHECK(!publications);
 }
 static void ready(void)
 {
     on5xelte_stage0_fb_prepare(0x47f00000);
     CHECK(prepared); CHECK(reservations == 1); CHECK(!publications);
+    CHECK(progress_maps == 1 && progress_unmaps == 1 && progress_writes == PROGRESS_CELL && progress_barriers == 1);
     CHECK(saved.protected_bytes >= saved.backing_bytes);
     CHECK(!on5xelte_stage0_fb_register()); CHECK(publications == 1);
 }
@@ -261,9 +308,92 @@ static void failures_and_drift(void)
     reset(); on5xelte_stage0_fb_prepare(0x47f00000); CHECK(prepared);
     publication_fail=true; CHECK(on5xelte_stage0_fb_register()==-ENOMEM && publications==1);
 }
+static u32 progress_pixel_at(u32 x, u32 y, u32 bpp)
+{
+    u32 wide;
+    uint16_t narrow;
+    const u8 *pixel = progress_pixels + y * saved.data.stride + x * bpp;
+    if (bpp == 2) { memcpy(&narrow, pixel, 2); return le16toh(narrow); }
+    memcpy(&wide, pixel, 4); return le32toh(wide);
+}
+static void progress_cells_and_refusals(void)
+{
+    const unsigned int modes[] = {0, 1, 4, 5, 8};
+    unsigned int i, phase, offset, writes_before, reads_before;
+    u8 previous[sizeof(progress_storage)];
+    u32 bpp, green, red, white;
+    struct simplefb_platform_data data;
+    for (i = 0; i < sizeof(modes) / sizeof(modes[0]); i++) {
+        reset(); mmio[0x50 / 4] = 1 | (modes[i] << 2);
+        on5xelte_stage0_fb_prepare(0x47f00000); CHECK(prepared);
+        bpp = modes[i] == 8 ? 2 : 4;
+        green = bpp == 2 ? 0x268c : modes[i] == 1 || modes[i] == 5 ? 0xff60d020 : 0xff20d060;
+        red = bpp == 2 ? 0xe186 : modes[i] == 1 || modes[i] == 5 ? 0xff3030e0 : 0xffe03030;
+        white = bpp == 2 ? 0xffff : 0xffffffff;
+        CHECK(progress_pixel_at(2, 2, bpp) == green);
+        CHECK(progress_pixel_at(0, 0, bpp) == white);
+        for (phase = 2; phase <= 7; phase++) {
+            memcpy(previous, progress_storage, sizeof(previous));
+            writes_before = progress_writes;
+            on5xelte_stage0_fb_checkpoint((enum on5xelte_stage0_progress)phase);
+            CHECK(prepared && progress_writes == writes_before + PROGRESS_CELL);
+            CHECK(progress_pixel_at((phase - 1) * PROGRESS_CELL + 2, 2, bpp) == (phase == 7 ? red : green));
+            for (offset = 0; offset < sizeof(progress_storage); offset++) {
+                ptrdiff_t position = (ptrdiff_t)offset - PROGRESS_GUARD;
+                if (position >= 0 && (u64)position < (u64)PROGRESS_CELL * saved.data.stride &&
+                    (u64)position % saved.data.stride >= (phase - 1) * PROGRESS_CELL * bpp &&
+                    (u64)position % saved.data.stride < phase * PROGRESS_CELL * bpp)
+                    continue;
+                CHECK(progress_storage[offset] == previous[offset]);
+            }
+        }
+        CHECK(progress_maps == 7 && progress_unmaps == 7 && progress_barriers == 7);
+    }
+    reset(); on5xelte_stage0_fb_checkpoint(ON5XELTE_STAGE0_TIMER_BEGIN);
+    CHECK(!reads && !progress_writes);
+    reset(); on5xelte_stage0_fb_prepare(0x47f00000); CHECK(prepared);
+    reads_before = reads; writes_before = progress_writes;
+    on5xelte_stage0_fb_checkpoint((enum on5xelte_stage0_progress)0);
+    on5xelte_stage0_fb_checkpoint((enum on5xelte_stage0_progress)8);
+    CHECK(reads == reads_before && progress_writes == writes_before);
+    data = saved.data;
+    CHECK(on5xelte_stage0_progress_draw(saved.address, saved.protected_bytes, &data, 0) == -EINVAL);
+    CHECK(on5xelte_stage0_progress_draw(saved.address, saved.protected_bytes, &data, 8) == -EINVAL);
+    CHECK(on5xelte_stage0_progress_draw(saved.address, saved.protected_bytes, NULL, 1) == -EINVAL);
+    data.stride++; CHECK(on5xelte_stage0_progress_draw(saved.address, saved.protected_bytes, &data, 1) == -EINVAL);
+    data = saved.data; data.format = "unsupported";
+    CHECK(on5xelte_stage0_progress_draw(saved.address, saved.protected_bytes, &data, 1) == -EINVAL);
+    data = saved.data; data.format = NULL;
+    CHECK(on5xelte_stage0_progress_draw(saved.address, saved.protected_bytes, &data, 1) == -EINVAL);
+    data = saved.data;
+    CHECK(on5xelte_stage0_progress_draw(0x40000000, saved.protected_bytes, &data, 1) == -EINVAL);
+    CHECK(on5xelte_stage0_progress_draw(0x14830000, saved.protected_bytes, &data, 1) == -EINVAL);
+    CHECK(on5xelte_stage0_progress_draw(saved.address + 1, saved.protected_bytes, &data, 1) == -EINVAL);
+    CHECK(on5xelte_stage0_progress_draw(UINT64_MAX - 15, saved.protected_bytes, &data, 1) == -EINVAL);
+    CHECK(on5xelte_stage0_progress_draw(saved.address, UINT64_MAX, &data, 1) == -EINVAL);
+    CHECK(on5xelte_stage0_progress_draw(saved.address, saved.visible_bytes - 1, &data, 1) == -EINVAL);
+    CHECK(progress_writes == writes_before && progress_maps == 1);
+    reset(); progress_map_fail = true; on5xelte_stage0_fb_prepare(0x47f00000);
+    CHECK(prepared && reservations == 1 && progress_maps == 1 && !progress_writes && !progress_unmaps);
+    CHECK(!on5xelte_stage0_fb_register() && publications == 1);
+    reset(); on5xelte_stage0_fb_prepare(0x47f00000); CHECK(prepared);
+    writes_before = progress_writes; mmio[0x134 / 4] ^= 1;
+    on5xelte_stage0_fb_checkpoint(ON5XELTE_STAGE0_TIMER_BEGIN);
+    CHECK(!prepared && progress_writes == writes_before);
+    CHECK(!on5xelte_stage0_fb_register() && !publications);
+    reset(); on5xelte_stage0_fb_prepare(0x47f00000); CHECK(prepared);
+    writes_before = progress_writes; reads_before = reads;
+    set_string("/", "compatible", "samsung,other-phone");
+    on5xelte_stage0_fb_checkpoint(ON5XELTE_STAGE0_TIMER_BEGIN);
+    CHECK(!prepared && progress_writes == writes_before && reads == reads_before);
+    CHECK(!on5xelte_stage0_fb_register() && !publications);
+    reset(); drift_after = 27 + 9; on5xelte_stage0_fb_prepare(0x47f00000);
+    CHECK(!prepared && reservations == 1 && !progress_writes);
+}
+
 int main(void)
 {
-    modes_and_geometry(); spans_and_full_backing(); fdt_and_memory(); malformed_fdt_layout(); failures_and_drift();
+    modes_and_geometry(); spans_and_full_backing(); fdt_and_memory(); malformed_fdt_layout(); failures_and_drift(); progress_cells_and_refusals();
     printf("framebuffer-stage0: %u synthetic checks passed; real libfdt, mocked MMIO/memblock/platform only; no hardware evidence.\n",checks);
     return 0;
 }

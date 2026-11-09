@@ -80,13 +80,29 @@ state later. Host MMIO/memblock/platform stand-ins do not test MMU/cache/traps,
 firmware ownership or a physical panel. A rejected handoff can leave Linux
 running without visible console; blank output does not diagnose the failure.
 
+## Guarded early diagnostics
+
+See [early progress](early-progress.md) for six visited-path cells and a red
+MCT-clock-failure cell. They can be painted after the full reservation gate,
+before simplefb/console registration and before/after timer initialization.
+All DECON reads, disabled-static-DT and late publication gates remain intact;
+only small checked visible framebuffer-memory cells are writable. No cell is
+proof of working interrupts/timers/panel/userspace, and absent cells remain
+ambiguous if entry/FDT/placement/scanout validation was never reached.
+
 ## Clocks and mandatory power-supply class
 
 The [narrow clock providers](clock-stage0.md) manage the MCT PCLK gate but only
 read/check its CMU_MIF parent. A disabled/unstable parent is a diagnostic refusal,
 not permission to change shared PLLs, dividers or DRAM clocks. MCT supplies
 clockevents while the architected counter remains the 26 MHz clocksource; actual
-interrupt operation has not been demonstrated.
+interrupt operation has not been demonstrated. The MCT consumer now propagates
+failed `clk_prepare_enable()` before interrupt/counter/event initialization,
+releases its failed acquisition/mapping, and does not disable another user's
+clock gate. CI reproduces the unchecked return in actual pinned upstream
+resource/caller functions and tests the patched functions with GCC/Clang and
+ASan/UBSan stand-ins. This confirms a code defect/fix, not its occurrence on a
+particular device or a hardware boot repair.
 
 Pinned ARM64 Kconfig selects `POWER_SUPPLY` even under allnoconfig. Stage0 requests
 that mandatory class without weakening the architecture. CI inventories every

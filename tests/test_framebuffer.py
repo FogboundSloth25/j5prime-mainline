@@ -18,8 +18,9 @@ class FramebufferTests(unittest.TestCase):
             shutil.copyfile(ROOT / "tests/c/framebuffer-kernel-mock.h",
                             include / "framebuffer-kernel-mock.h")
             driver = ROOT / "kernel/drivers/video/fbdev/on5xelte-stage0-fb.c"
+            renderer = ROOT / "kernel/drivers/video/fbdev/on5xelte-stage0-progress.c"
             headers = re.findall(r"^#include <((?:linux|asm)/[^>]+)>",
-                                 driver.read_text(), re.MULTILINE)
+                                 driver.read_text() + "\n" + renderer.read_text(), re.MULTILINE)
             for name in headers:
                 header = include / name
                 header.parent.mkdir(parents=True, exist_ok=True)
@@ -43,3 +44,16 @@ class FramebufferTests(unittest.TestCase):
         self.assertNotRegex(source, r"\b(?:writel|writew|writeb|memcpy_toio|memset_io|regmap_write)\s*\(")
         self.assertIn("memblock_reserve(candidate.address, candidate.protected_bytes)", source)
         self.assertIn("device_initcall_sync(on5xelte_stage0_fb_register)", source)
+
+    def test_renderer_is_memory_only_and_original_gates_remain(self):
+        source = (ROOT / "kernel/drivers/video/fbdev/on5xelte-stage0-progress.c").read_text()
+        self.assertNotRegex(source, r"\b(?:readl|writel|writew|writeb|regmap_write)\s*\(")
+        self.assertNotIn("0x14830000", source)
+        self.assertIn("memcpy_toio", source)
+        self.assertIn("mapped_bytes > protected_bytes", source)
+        gate = (ROOT / "kernel/drivers/video/fbdev/on5xelte-stage0-fb.c").read_text()
+        checkpoint = gate.split("void __init on5xelte_stage0_fb_checkpoint(", 1)[1].split("static int __init on5xelte_stage0_fb_register", 1)[0]
+        self.assertLess(checkpoint.index("validate_fdt("), checkpoint.index("early_ioremap("))
+        self.assertLess(checkpoint.index("stable_snapshot("), checkpoint.index("on5xelte_stage0_progress_draw("))
+        self.assertIn("prepared = false", checkpoint)
+        self.assertIn("kernel_first != STAGE0_RAM_BASE", gate)

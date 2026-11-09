@@ -27,6 +27,7 @@ class BuiltinTests(unittest.TestCase):
         report = self.check()
         self.assertTrue(report["built_in_initramfs_verified"])
         self.assertTrue(report["native_handoff_symbols_present"])
+        self.assertTrue(report["native_early_progress_symbols_present"])
         self.assertEqual(report["linked_archive_bytes"], len(self.archive))
         self.assertEqual(report["image_archive_offset"], 512)
         self.assertEqual(report["image_size_symbol_offset"], 3840)
@@ -50,7 +51,9 @@ class BuiltinTests(unittest.TestCase):
                             ("__initramfs_start",self.symbols["_text"]),
                             ("__initramfs_size",self.symbols["_text"]+len(self.image)),
                             ("on5xelte_stage0_fb_prepare",self.symbols["_text"]),
-                            ("on5xelte_stage0_fb_register",self.symbols["_end"]+1)):
+                            ("on5xelte_stage0_fb_register",self.symbols["_end"]+1),
+                            ("on5xelte_stage0_fb_checkpoint",self.symbols["_text"]),
+                            ("on5xelte_stage0_progress_draw",self.symbols["_end"]+1)):
             symbols = dict(self.symbols); symbols[name] = value
             with self.subTest(name=name), self.assertRaises(ValueError):
                 self.check(symbols=symbols)

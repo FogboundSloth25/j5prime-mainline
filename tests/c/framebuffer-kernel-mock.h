@@ -3,17 +3,25 @@
 #ifndef J5PRIME_FRAMEBUFFER_MOCK_H
 #define J5PRIME_FRAMEBUFFER_MOCK_H
 #include <errno.h>
+#include <endian.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include <libfdt.h>
+typedef uint8_t u8;
+typedef uint16_t __le16;
+typedef uint32_t __le32;
 typedef uint32_t u32;
 typedef uint64_t u64;
 typedef uint64_t phys_addr_t;
 #define __init
 #define __initdata
+#define __initconst
+#define cpu_to_le16(v) htole16(v)
+#define cpu_to_le32(v) htole32(v)
+#define wmb() mock_progress_barrier()
 #define __iomem
 #define U64_MAX UINT64_MAX
 #define SZ_4K 0x1000ULL
@@ -40,6 +48,8 @@ extern struct memblock memblock;
     for ((r) = memblock.reserved.regions; \
          (r) < memblock.reserved.regions + memblock.reserved.cnt; (r)++)
 struct simplefb_platform_data { u32 width, height, stride; const char *format; };
+#define CONFIG_FB_ON5XELTE_STAGE0 1
+#include "../../kernel/include/linux/on5xelte-stage0-fb.h"
 struct resource { const char *name; u64 start, end; unsigned long flags; };
 struct platform_device { int dummy; };
 struct platform_device_info {
@@ -58,6 +68,8 @@ void *early_ioremap(u64 physical, size_t bytes);
 void early_iounmap(void *base, size_t bytes);
 void *ioremap(u64 physical, size_t bytes);
 void iounmap(void *base);
+void memcpy_toio(void *target, const void *source, size_t bytes);
+void mock_progress_barrier(void);
 u64 memblock_start_of_DRAM(void);
 u64 memblock_end_of_DRAM(void);
 int memblock_reserve(u64 address, u64 bytes);

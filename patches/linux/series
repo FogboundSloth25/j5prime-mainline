@@ -2,3 +2,5 @@
 0002-exynos7570-stage0-bindings-and-dtb-target.patch
 0003-exynos7570-stage0-clock-providers.patch
 0004-on5xelte-native-scanout-handoff.patch
+0005-exynos-mct-check-clock-enable.patch
+0006-on5xelte-guarded-early-progress.patch

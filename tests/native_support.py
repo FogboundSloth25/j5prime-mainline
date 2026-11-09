@@ -31,7 +31,9 @@ def linked_fixture(marker: bytes = b"MAINLINE_STAGE0_USERSPACE_OK") -> tuple:
     symbols = {"_text": text, "_end": text + 8192,
                "__initramfs_start": text + 512, "__initramfs_size": text + 3840,
                "on5xelte_stage0_fb_prepare": text + 64,
-               "on5xelte_stage0_fb_register": text + 128}
+               "on5xelte_stage0_fb_register": text + 128,
+               "on5xelte_stage0_fb_checkpoint": text + 192,
+               "on5xelte_stage0_progress_draw": text + 256}
     elf = bytearray(256 + len(image))
     elf[:120] = synthetic_elf()[:120]
     struct.pack_into("<Q", elf, 24, text)

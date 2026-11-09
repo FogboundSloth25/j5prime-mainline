@@ -36,6 +36,7 @@ LINUX=$WORK/linux-$VERSION
 run_logged fetch python3 -m scripts.fetch_kernel --work-root "$WORK"
 # Retain the hash-verified upstream input even if patching or compilation fails.
 cp -- "$WORK/linux-$VERSION.tar.xz" "$SOURCE_DIST/"
+cp -- "$LINUX/drivers/clocksource/exynos_mct.c" "$SOURCE_DIST/exynos-mct-upstream-before-patches.c"
 while IFS= read -r patch; do
     [[ -z $patch || $patch == \#* ]] && continue
     [[ $patch =~ ^[0-9]{4}-[a-z0-9-]+\.patch$ ]] || exit 1
@@ -45,8 +46,11 @@ done < patches/linux/series
 install -m 644 kernel/drivers/clk/samsung/clk-exynos7570-stage0.c \
     "$LINUX/drivers/clk/samsung/"
 install -m 644 kernel/drivers/video/fbdev/on5xelte-stage0-fb.c \
-    "$LINUX/drivers/video/fbdev/"
+    kernel/drivers/video/fbdev/on5xelte-stage0-progress.c "$LINUX/drivers/video/fbdev/"
 install -m 644 kernel/include/linux/on5xelte-stage0-fb.h "$LINUX/include/linux/"
+python3 -m scripts.check_mct --patched "$LINUX/drivers/clocksource/exynos_mct.c" \
+    --upstream "$SOURCE_DIST/exynos-mct-upstream-before-patches.c" \
+    > "$REPORTS/mct-consumer-regression.json"
 install -m 644 dts/exynos7570.dtsi dts/exynos7570-on5xelte-stage0.dts \
     "$LINUX/arch/arm64/boot/dts/exynos/"
 
@@ -121,6 +125,9 @@ cat > "$DIST/NO-PHONE-WRITE-AUTHORIZATION.txt" <<'NOTICE'
 Experimental upstream Linux native BOOT candidate for SM-G570F SWA rev04 only.
 The kernel includes a checked built-in diagnostic /init and a read-only DECON
 full-backing/reservation gate; the static DT simplefb placeholder stays disabled.
+Guarded early checkpoints write only small visible framebuffer-memory cells.
+MCT clock-enable failure is propagated before timer interrupt/counter/event use.
+The checkpoints are visited-path diagnostics, not working hardware proof.
 The generated legacy header requests Image at 0x40000000, NOT old 0x40080000.
 S-Boot acceptance, actual Image/FDT placement and Linux boot remain UNVERIFIED.
 The DTBH and footer are format scaffolding, not Samsung signature authentication.
@@ -150,6 +157,8 @@ report = {
     'native_image_requested_load_address': '0x40000000',
     'built_in_diagnostic_init_verified': True,
     'native_framebuffer_handoff_code_built_in': True,
+    'native_early_progress_code_built_in_and_linked': True,
+    'MCT_consumer_error_propagation_synthetic_regression_checked': True,
     'framebuffer_runtime_handoff_applied_on_phone': False,
     'static_DTB_framebuffer_enabled': False,
     'generated_rev04_DTBH_legacy_BOOT_wrapper': True,
@@ -181,6 +190,8 @@ cat >> "$GITHUB_STEP_SUMMARY" <<'SUMMARY'
 - Text-offset-zero ARM64 Image requested at 0x40000000; full linked memory checked
 - Actual Image/vmlinux bytes contain the checked built-in diagnostic /init archive
 - Disabled static framebuffer; compiled read-only DECON/full-backing runtime gate
+- Guarded framebuffer-memory progress before/after timer initialization
+- Actual upstream/patched MCT resource/caller regression with GCC/Clang + sanitizers
 - Generated one-entry SWA rev04 DTBH v2 and compact legacy BOOT wrapper
 - Resolved Kconfig, DT properties/schemas and synthetic host stand-ins checked
 - Images, logs, reports and corresponding sources exported only recipient-encrypted

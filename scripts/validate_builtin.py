@@ -13,7 +13,8 @@ from scripts.make_initramfs import parse_newc
 from scripts.validate import validate_image, validate_init_elf, validate_initramfs
 
 REQUIRED_SYMBOLS = {"_text", "_end", "__initramfs_start", "__initramfs_size",
-                    "on5xelte_stage0_fb_prepare", "on5xelte_stage0_fb_register"}
+                    "on5xelte_stage0_fb_prepare", "on5xelte_stage0_fb_register",
+                    "on5xelte_stage0_fb_checkpoint", "on5xelte_stage0_progress_draw"}
 
 
 def kernel_symbols(path: Path) -> dict:
@@ -57,7 +58,8 @@ def validate_builtin(image: bytes, vmlinux_path: Path, archive: bytes, init: byt
         raise ValueError("built-in /init differs from the checked diagnostic executable")
     symbols = kernel_symbols(vmlinux_path)
     text = symbols["_text"]
-    for name in ("on5xelte_stage0_fb_prepare", "on5xelte_stage0_fb_register"):
+    for name in ("on5xelte_stage0_fb_prepare", "on5xelte_stage0_fb_register",
+                 "on5xelte_stage0_fb_checkpoint", "on5xelte_stage0_progress_draw"):
         if not text + 64 <= symbols[name] < text + len(image):
             raise ValueError("native handoff symbol is outside the linked Image")
     if symbols["_end"] - text != image_report["required_memory_bytes"]:
@@ -74,6 +76,7 @@ def validate_builtin(image: bytes, vmlinux_path: Path, archive: bytes, init: byt
             elf_bytes_at(elf, symbols["__initramfs_size"], 8) != struct.pack("<Q", size)):
         raise ValueError("vmlinux and Image built-in archive disagree")
     return {"built_in_initramfs_verified": True, "native_handoff_symbols_present": True,
+            "native_early_progress_symbols_present": True,
             "image_archive_offset": offset, "image_size_symbol_offset": size_offset,
             "linked_archive_bytes": size, "archive_sha256": hashlib.sha256(archive).hexdigest(),
             "init_sha256": hashlib.sha256(init).hexdigest(), "image": image_report,

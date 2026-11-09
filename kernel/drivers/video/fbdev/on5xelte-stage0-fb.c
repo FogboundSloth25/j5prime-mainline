@@ -392,7 +392,44 @@ void __init on5xelte_stage0_fb_prepare(phys_addr_t fdt_phys)
 	pr_info("ON5XELTE_STAGE0_FB_RESERVED: base=%#llx backing=%llu page-envelope=%llu\n",
 		(unsigned long long)saved.address, (unsigned long long)saved.backing_bytes,
 		(unsigned long long)saved.protected_bytes);
+	on5xelte_stage0_fb_checkpoint(ON5XELTE_STAGE0_MEMORY_OK);
 }
+void __init on5xelte_stage0_fb_checkpoint(enum on5xelte_stage0_progress phase)
+{
+	struct stage0_registers registers;
+	void __iomem *base;
+	int ret;
+
+	if (!prepared || phase < ON5XELTE_STAGE0_MEMORY_OK ||
+		phase > ON5XELTE_STAGE0_MCT_CLOCK_FAILED)
+		return;
+	/* Revalidate the board/FDT BEFORE accessing hard-coded MMIO again. */
+	if (!initial_boot_params || fdt_totalsize(initial_boot_params) != saved_fdt_bytes ||
+		validate_fdt(&saved, saved_fdt_phys, false)) {
+		prepared = false;
+		pr_err("stage0-fb: progress FDT drift; no framebuffer writes or later publication\n");
+		return;
+	}
+	base = early_ioremap(DECON_BASE, DECON_BYTES);
+	if (!base) {
+		pr_err("stage0-fb: progress DECON mapping failed; no framebuffer writes\n");
+		return;
+	}
+	ret = stable_snapshot(base, &registers);
+	if (ret || memcmp(&registers, &saved.registers, sizeof(registers))) {
+		prepared = false;
+		early_iounmap(base, DECON_BYTES);
+		pr_err("stage0-fb: progress scanout drift; no framebuffer writes or later publication\n");
+		return;
+	}
+	ret = on5xelte_stage0_progress_draw(saved.address, saved.protected_bytes, &saved.data, phase);
+	early_iounmap(base, DECON_BYTES);
+	if (ret)
+		pr_err("stage0-fb: progress memory mapping/write refused (%d)\n", ret);
+	else
+		pr_info("ON5XELTE_STAGE0_PROGRESS: checkpoint=%u memory write completed; not panel proof\n", phase);
+}
+
 static int __init on5xelte_stage0_fb_register(void)
 {
 	struct stage0_registers registers;
