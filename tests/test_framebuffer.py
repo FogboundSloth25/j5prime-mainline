@@ -9,6 +9,17 @@ import unittest
 from tests.support import ROOT, temporary_directory
 
 
+def write_mock_headers(include: Path, headers: list[str]) -> None:
+    for name in headers:
+        # glibc <errno.h> includes the system Linux UAPI error constants too.
+        # Mocking linux/errno.h recursively suppresses EINVAL/ENOMEM in libc.
+        if name == "linux/errno.h":
+            continue
+        header = include / name
+        header.parent.mkdir(parents=True, exist_ok=True)
+        header.write_text('#include "framebuffer-kernel-mock.h"\n')
+
+
 class FramebufferTests(unittest.TestCase):
     def test_production_gate_with_sanitizers_and_injected_failures(self):
         with temporary_directory() as directory:
@@ -21,10 +32,7 @@ class FramebufferTests(unittest.TestCase):
             renderer = ROOT / "kernel/drivers/video/fbdev/on5xelte-stage0-progress.c"
             headers = re.findall(r"^#include <((?:linux|asm)/[^>]+)>",
                                  driver.read_text() + "\n" + renderer.read_text(), re.MULTILINE)
-            for name in headers:
-                header = include / name
-                header.parent.mkdir(parents=True, exist_ok=True)
-                header.write_text('#include "framebuffer-kernel-mock.h"\n')
+            write_mock_headers(include, headers)
             binary = out / "framebuffer-stage0"
             compiled = subprocess.run([
                 os.environ.get("HOSTCC", "gcc"), "-std=gnu11", "-Wall", "-Wextra", "-Werror", "-g", "-O1",
@@ -57,3 +65,10 @@ class FramebufferTests(unittest.TestCase):
         self.assertLess(checkpoint.index("stable_snapshot("), checkpoint.index("on5xelte_stage0_progress_draw("))
         self.assertIn("prepared = false", checkpoint)
         self.assertIn("kernel_first != STAGE0_RAM_BASE", gate)
+
+    def test_system_errno_header_is_not_shadowed_by_standins(self):
+        with temporary_directory() as directory:
+            include = Path(directory) / "include"
+            write_mock_headers(include, ["linux/errno.h", "linux/init.h"])
+            self.assertFalse((include / "linux/errno.h").exists())
+            self.assertTrue((include / "linux/init.h").is_file())
