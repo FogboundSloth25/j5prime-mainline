@@ -6,7 +6,7 @@ unsigned long clk_rate;
 static struct clk tick_clock = { "fin_pll" }, mct_clock = { "mct" };
 static unsigned char mapped_registers[4096];
 static int enable_error;
-static unsigned int maps, unmaps, enables, puts, interrupts, counters, events, markers;
+static unsigned int maps, unmaps, enables, clock_puts, interrupts, counters, events, markers;
 void *of_iomap(struct device_node *np, unsigned int index)
 { assert(np && index == 0); maps++; return mapped_registers; }
 struct clk *of_clk_get_by_name(struct device_node *np, const char *name)
@@ -16,7 +16,7 @@ unsigned long clk_get_rate(struct clk *clock)
 int clk_prepare_enable(struct clk *clock)
 { assert(clock == &mct_clock); enables++; return enable_error; }
 void clk_put(struct clk *clock)
-{ assert(clock == &mct_clock || clock == &tick_clock); puts++; }
+{ assert(clock == &mct_clock || clock == &tick_clock); clock_puts++; }
 void iounmap(void *base)
 { assert(base == mapped_registers); unmaps++; }
 void on5xelte_stage0_fb_checkpoint(enum on5xelte_stage0_progress phase)
@@ -43,7 +43,7 @@ int main(int argc, char **argv)
     printf("{\"enable_error\":%d,\"result\":%d,\"maps\":%u,\"unmaps\":%u,"
            "\"enables\":%u,\"puts\":%u,\"interrupts\":%u,\"counters\":%u,"
            "\"events\":%u,\"markers\":%u,\"reg_base_cleared\":%s}\n",
-           enable_error, result, maps, unmaps, enables, puts, interrupts, counters, events,
+           enable_error, result, maps, unmaps, enables, clock_puts, interrupts, counters, events,
            markers, reg_base == NULL ? "true" : "false");
     return 0;
 }
